@@ -1,5 +1,7 @@
 use poker_utils::GameRules;
-use table_runner::{GameTable, TableId, TableHandle, TableEvent, TableCommand};
+use table_runner::{GameTable, TableId, PlayerRegistry};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Clone, Debug)]
 pub struct Table {
@@ -19,10 +21,10 @@ impl TableFactory {
         TableFactory { next_table_id: 1 }
     }
 
-    pub fn create_table(&mut self, capacity: usize, rules: GameRules) -> GameTable {
+    pub fn create_table(&mut self, capacity: usize, rules: GameRules, player_registry: Arc<Mutex<PlayerRegistry>>) -> GameTable {
         let table_id = self.next_table_id;
         self.next_table_id += 1;
-        GameTable::new(table_id, capacity, rules)
+        GameTable::new(table_id, capacity, rules, player_registry)
     }
 }
 

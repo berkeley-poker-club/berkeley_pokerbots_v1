@@ -1,15 +1,17 @@
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
 use poker_utils::{
     GameState, GameRules, Street, SeatIndex, SeatStatus, Action, ValidAction,
-    ActionValidator, GameEvent, evaluate_hand, PlayerId, Card
+    ActionValidator, GameEvent, evaluate_hand, Card
 };
+use poker_utils::game_state::PlayerId;
 use crate::player_interface::{Player, DecisionContext, LegalActions, PublicEvent, PlayerError};
 
 pub struct GameRunner {
     pub table_id: u64,
     pub state: GameState,
-    players: HashMap<SeatIndex, Box<dyn Player>>,
+    players: HashMap<SeatIndex, Arc<Mutex<dyn Player>>>,
     event_sink: mpsc::UnboundedSender<GameEvent>,
 }
 
@@ -28,7 +30,7 @@ impl GameRunner {
         }
     }
 
-    pub fn seat_player(&mut self, seat: SeatIndex, player: Box<dyn Player>, stack: i64) -> Result<(), String> {
+    pub async fn seat_player(&mut self, seat: SeatIndex, player: Arc<Mutex<dyn Player>>, stack: i64) -> Result<(), String> {
         if seat >= self.state.rules.max_seats as SeatIndex {
             return Err("seat out of bounds".to_string());
         }
@@ -38,7 +40,10 @@ impl GameRunner {
             return Err("seat occupied".to_string());
         }
 
-        let player_id = player.player_id();
+        let player_id = {
+            let player_guard = player.lock().await;
+            player_guard.player_id()
+        };
         *seat_state = poker_utils::SeatState::new_player(player_id, stack);
         self.players.insert(seat, player);
 
@@ -390,7 +395,8 @@ impl GameRunner {
         legal: &LegalActions,
     ) -> Result<Action, PlayerError> {
         if let Some(player) = self.players.get(&seat) {
-            player.request_action(context, legal, 1000).await
+            let player_guard = player.lock().await;
+            player_guard.request_action(context, legal, 1000).await
         } else {
             Err(PlayerError::Disconnected)
         }
@@ -398,7 +404,8 @@ impl GameRunner {
 
     async fn broadcast_event(&self, event: PublicEvent) {
         for player in self.players.values() {
-            let _ = player.notify_event(&event).await;
+            let player_guard = player.lock().await;
+            let _ = player_guard.notify_event(&event).await;
         }
     }
 
@@ -442,6 +449,10 @@ impl GameRunner {
             .enumerate()
             .find(|(_, seat)| seat.player_id == Some(player_id))
             .map(|(i, _)| i as SeatIndex)
+    }
+
+    pub fn remove_player_from_seat(&mut self, seat_idx: SeatIndex) -> Option<Arc<Mutex<dyn Player>>> {
+        self.players.remove(&seat_idx)
     }
 }
 

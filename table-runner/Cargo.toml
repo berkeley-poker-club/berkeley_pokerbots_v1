@@ -10,3 +10,4 @@ async-trait = "0.1.89"
 anyhow = "1.0.99"
 tokio = { version = "1.47.1", features = ["full"] }
 poker-utils = { path = "../poker-utils" }
+rand = "0.8"

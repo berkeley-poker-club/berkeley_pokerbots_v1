@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use poker_utils::{
-    Action, Card, HandStrength, SeatIndex, Street, SeatStatus, PlayerId
+    Action, Card, HandStrength, SeatIndex, Street, SeatStatus
 };
+use poker_utils::game_state::PlayerId;
 
 #[async_trait]
 pub trait Player: Send + Sync {

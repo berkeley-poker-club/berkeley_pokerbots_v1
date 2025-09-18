@@ -7,7 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use poker_utils::{Action, PlayerId};
+use poker_utils::Action;
+use poker_utils::game_state::PlayerId;
 use crate::player_interface::{Player, PublicEvent, DecisionContext, LegalActions, PlayerError};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
