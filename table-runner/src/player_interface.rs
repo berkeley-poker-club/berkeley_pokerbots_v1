@@ -16,6 +16,14 @@ pub trait Player: Send + Sync {
     fn player_id(&self) -> PlayerId;
 }
 
+struct BotProcess {
+    player_id: PlayerId,
+    process: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::process::ChildStdout,
+    // timeout_handler: TimeoutManager,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DecisionContext {
     pub hand_id: u64,
