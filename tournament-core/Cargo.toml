@@ -1,0 +1,14 @@
+[package]
+name = "tournament-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0.225", features = ["derive"] }
+async-trait = "0.1.89"
+anyhow = "1.0.99"
+rand = "0.10.0-rc.0"
+tokio = "1.47.1"
+ordered-float = "5.0.0"
+poker-utils = { path = "../poker-utils" }
+table-runner = { path = "../table-runner" }

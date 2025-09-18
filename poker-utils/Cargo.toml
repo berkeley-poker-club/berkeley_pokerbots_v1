@@ -1,0 +1,8 @@
+[package]
+name = "poker-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0.225", features = ["derive"] }
+rand = "0.10.0-rc.0"
