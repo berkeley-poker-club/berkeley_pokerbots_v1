@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use rand::{rngs::StdRng, SeedableRng, seq::SliceRandom};
 
-use crate::config::{TournamentConfig, LevelSpec};
-use crate::table_manager::{Table, TableId, TableHandle, TableEvent, TableCommand};
+use crate::config::TournamentConfig;
+use crate::table_manager::{Table, TableFactory};
+use table_runner::{TableId, TableHandle, TableEvent, TableCommand};
 use crate::player_manager::PlayerId;
+use poker_utils::LevelSpec;
+use table_runner::GameTable;
 
 pub type Placements = HashMap<PlayerId, usize>;
 pub type SeriesResult = HashMap<PlayerId, Vec<usize>>;
@@ -26,11 +29,32 @@ pub struct TournamentState {
 pub struct TournamentDirector {
     cfg: TournamentConfig,
     rng: StdRng,
+    table_factory: TableFactory,
 }
 
 impl TournamentDirector {
     pub fn new(cfg: TournamentConfig) -> Self {
-        Self { rng: StdRng::seed_from_u64(cfg.rng_seed), cfg }
+        Self {
+            rng: StdRng::seed_from_u64(cfg.rng_seed),
+            cfg,
+            table_factory: TableFactory::new(),
+        }
+    }
+
+    pub fn create_tables(&mut self, num_tables: usize) -> Vec<GameTable> {
+        let mut tables = Vec::new();
+        for _ in 0..num_tables {
+            let rules = self.cfg.to_game_rules(0);
+            let table = self.table_factory.create_table(self.cfg.table_size, rules);
+            tables.push(table);
+        }
+        tables
+    }
+
+    pub async fn run_single_tournament_with_players(&mut self, players: Vec<PlayerId>) -> Placements {
+        let num_tables = (players.len() + self.cfg.table_size - 1) / self.cfg.table_size;
+        let tables = self.create_tables(num_tables);
+        self.run_single_tournament(players, tables, self.cfg.initial_stack).await
     }
 
     pub async fn run_single_tournament<H: TableHandle>(
@@ -82,7 +106,8 @@ impl TournamentDirector {
                         }
                         TableEvent::PlayerBusted { player, .. } => {
                             st.active_players.remove(&player);
-                            // st.eliminated.push((player, num_hands_played));
+                            let hands_played = st.hands_played.get(&player).copied().unwrap_or(0);
+                            st.eliminated.push((player, hands_played));
                         }
                         TableEvent::TableSizes { table_id, active_count } => {
                             if let Some(m) = st.tables.iter_mut().find(|m| m.id == table_id) {

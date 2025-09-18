@@ -4,6 +4,14 @@ use crate::{Card, Deck, HandStrength, Action, ValidAction, ActionError, ActionRe
 
 pub type PlayerId = usize;
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LevelSpec {
+    pub level_id: u32,
+    pub small_blind: i64,
+    pub big_blind: i64,
+    pub ante: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct GameState {
     pub hand_id: u64,

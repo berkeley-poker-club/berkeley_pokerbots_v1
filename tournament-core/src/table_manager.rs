@@ -1,28 +1,5 @@
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use crate::player_manager::PlayerId;
-
-pub type TableId = u64;
-pub type SeatIndex = u8;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum TableCommand {
-    CreateTable { capacity: usize },
-    SeatPlayer { player_id: usize },
-    ApplyBlinds { level_id: u32, small_blind: i64, big_blind: i64, ante: i64 },
-    PauseAfterHand,
-    Resume,
-    CloseAfterHand,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum TableEvent {
-    HandEnded { table_id: TableId, participants: Vec<PlayerId> },
-    PlayerBusted { table_id: TableId, player: PlayerId },
-    TableSizes  { table_id: TableId, active_count: PlayerId },
-    ReadyForReseat { table_id: TableId, open_seats: PlayerId },
-    LevelApplied { table_id: TableId, level_id: PlayerId },
-}
+use poker_utils::GameRules;
+use table_runner::{GameTable, TableId, TableHandle, TableEvent, TableCommand};
 
 #[derive(Clone, Debug)]
 pub struct Table {
@@ -32,10 +9,25 @@ pub struct Table {
     pub status_running: bool,
 }
 
-#[async_trait]
-pub trait TableHandle: Send + Sync {
-    fn id(&self) -> TableId;
-    fn capacity(&self) -> usize;
-    async fn send(&self, cmd: TableCommand) -> anyhow::Result<()>;
-    async fn drain_events(&self) -> Vec<TableEvent>;
+
+pub struct TableFactory {
+    next_table_id: TableId,
+}
+
+impl TableFactory {
+    pub fn new() -> Self {
+        TableFactory { next_table_id: 1 }
+    }
+
+    pub fn create_table(&mut self, capacity: usize, rules: GameRules) -> GameTable {
+        let table_id = self.next_table_id;
+        self.next_table_id += 1;
+        GameTable::new(table_id, capacity, rules)
+    }
+}
+
+impl Default for TableFactory {
+    fn default() -> Self {
+        Self::new()
+    }
 }

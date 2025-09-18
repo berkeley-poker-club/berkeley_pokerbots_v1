@@ -1,12 +1,5 @@
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LevelSpec {
-    pub level_id: u32,
-    pub small_blind: i64,
-    pub big_blind: i64,
-    pub ante: i64,
-}
+use poker_utils::{LevelSpec, GameRules};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TournamentConfig {
@@ -18,6 +11,7 @@ pub struct TournamentConfig {
     pub max_level_duration_secs: u64,
     pub series_length: usize,
     pub rng_seed: u64,
+    pub initial_stack: i64,
 }
 
 impl Default for TournamentConfig {
@@ -31,6 +25,19 @@ impl Default for TournamentConfig {
             max_level_duration_secs: 120,
             series_length: 100,
             rng_seed: 28,
+            initial_stack: 1000,
+        }
+    }
+}
+
+impl TournamentConfig {
+    pub fn to_game_rules(&self, level_index: usize) -> GameRules {
+        let level = &self.blind_levels[level_index];
+        GameRules {
+            small_blind: level.small_blind,
+            big_blind: level.big_blind,
+            ante: level.ante,
+            max_seats: self.table_size,
         }
     }
 }
