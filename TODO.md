@@ -17,9 +17,14 @@
   - [x] Tournament director migration orchestration with rollback support
   - [x] Graceful table breaking without losing bot processes
 
-## Testing & Validation
+## Submission
+- [ ] Add bot submission system via file upload on web interface
+- [ ] Add validation of bot submissions to make sure they are a real tournament participant (e.g. student id or similar
+- [ ] Add validation of bot submissions to make sure they adhere to api
+- [ ] Implement player submission management system ensuring only one bot active at a time, each submission has submission id identifying both the player and their submission number
+
+## Testing
 - [ ] Add unit tests for poker hand evaluation
-- [ ] Test tournament flow with mock bots
 - [ ] Validate blind progression and table breaking logic
 - [ ] Test process-based bot communication
 
@@ -27,10 +32,4 @@
 - [ ] Bot process management (spawn, monitor, restart)
 - [ ] Tournament logging and metrics
 - [ ] Configuration validation
-- [ ] Error handling for bot disconnections
 
-## Future Enhancements
-- [ ] Multi-table tournament UI/dashboard
-- [ ] Tournament replay system
-- [ ] Advanced blind structures (antes, bounties)
-- [ ] Bot performance analytics

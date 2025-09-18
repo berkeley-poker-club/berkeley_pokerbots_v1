@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::{Player, ProcessBot, BotError, TableId};
-use poker_utils::game_state::PlayerId;
+use poker_utils::{game_state::PlayerId, TournamentConfig};
 
 #[derive(Debug, Clone)]
 pub enum PlayerState {
@@ -19,16 +19,18 @@ pub struct PlayerRegistry {
     stacks: HashMap<PlayerId, i64>,
     table_assignments: HashMap<TableId, HashSet<PlayerId>>,
     next_player_id: PlayerId,
+    tournament_config: TournamentConfig,
 }
 
 impl PlayerRegistry {
-    pub fn new() -> Self {
+    pub fn new(tournament_config: TournamentConfig) -> Self {
         PlayerRegistry {
             bots: HashMap::new(),
             states: HashMap::new(),
             stacks: HashMap::new(),
             table_assignments: HashMap::new(),
             next_player_id: 1,
+            tournament_config,
         }
     }
 
@@ -39,7 +41,7 @@ impl PlayerRegistry {
         let bot = ProcessBot::spawn(player_id, executable, args).await?;
         self.bots.insert(player_id, Arc::new(Mutex::new(bot)));
         self.states.insert(player_id, PlayerState::Available);
-        self.stacks.insert(player_id, 100); // default starting stack
+        self.stacks.insert(player_id, self.tournament_config.initial_stack);
         Ok(player_id)
     }
 
@@ -47,7 +49,7 @@ impl PlayerRegistry {
         let player_id = bot.player_id();
         self.bots.insert(player_id, Arc::new(Mutex::new(bot)));
         self.states.insert(player_id, PlayerState::Available);
-        self.stacks.insert(player_id, 100); // default starting stack
+        self.stacks.insert(player_id, self.tournament_config.initial_stack);
         player_id
     }
 
@@ -95,7 +97,7 @@ impl PlayerRegistry {
             .collect()
     }
 
-    // Migration support
+    // migration logic for breaking tables
     pub fn start_migration(&mut self, player_id: PlayerId, from_table: TableId, to_table: TableId) -> Result<(), String> {
         let current_state = self.states.get(&player_id)
             .ok_or_else(|| format!("Player {} not found", player_id))?;
@@ -139,6 +141,10 @@ impl PlayerRegistry {
 
     pub fn player_count(&self) -> usize {
         self.bots.len()
+    }
+
+    pub fn tournament_config(&self) -> &TournamentConfig {
+        &self.tournament_config
     }
 
     pub fn remove_eliminated_player(&mut self, player_id: PlayerId) {
@@ -202,6 +208,6 @@ impl PlayerRegistry {
 
 impl Default for PlayerRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::new(TournamentConfig::default())
     }
 }

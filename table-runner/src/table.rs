@@ -198,7 +198,6 @@ impl GameTable {
                         paused = true;
                     }
 
-                    // Handle extractions after hand completion
                     Self::process_extractions(
                         &runner_clone,
                         &event_queue_clone,
@@ -252,7 +251,16 @@ impl GameTable {
             if let Some(player_id) = queue.pop_front() {
                 let seat = available_seats[i];
                 let mut registry = player_registry.lock().await;
-                let stack = registry.get_player_stack(&player_id).unwrap_or(1000);
+                let stack = registry.get_player_stack(&player_id).unwrap_or_else(|| {
+                    // this should never happen but just in case
+                    let total_tournament_chips = registry.player_count() as i64 * registry.tournament_config().initial_stack;
+                    let other_players_chips: i64 = registry.active_players().iter()
+                        .filter(|&&p| p != player_id)
+                        .filter_map(|&p| registry.get_player_stack(&p))
+                        .sum();
+
+                    std::cmp::max(0, total_tournament_chips - other_players_chips)
+                });
                 if let Some(player) = registry.get_player_ref(&player_id) {
                     registry.update_player_state(player_id, PlayerState::Playing {
                         table_id: runner.table_id,
@@ -336,12 +344,10 @@ impl GameTable {
                 }
                 drop(runner);
 
-                // Update player state to available for re-seating
                 let mut registry = player_registry.lock().await;
                 registry.update_player_state(*player_id, PlayerState::Available);
                 drop(registry);
 
-                // Send extraction event
                 let mut queue = event_queue.lock().await;
                 queue.push_back(TableEvent::PlayerExtracted {
                     table_id,
