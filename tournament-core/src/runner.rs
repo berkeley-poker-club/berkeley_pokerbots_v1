@@ -73,7 +73,7 @@ impl TournamentDirector {
                     let _ = t.send(TableCommand::SeatPlayer { player_id: p.clone() }).await;
                 }
             }
-            let lvl = &self.cfg.blind_levels[0];
+            let lvl = self.cfg.blind_generator.generate_level(0);
             let _ = t.send(TableCommand::ApplyBlinds {
                 level_id: lvl.level_id, small_blind: lvl.small_blind, big_blind: lvl.big_blind, ante: lvl.ante
             }).await;
@@ -91,7 +91,7 @@ impl TournamentDirector {
             hands_played: players.iter().map(|p| (p.clone(), 0)).collect(),
             eliminated: vec![],
             active_players: players.iter().cloned().collect::<HashSet<_>>(),
-            current_level: self.cfg.blind_levels[0].clone(),
+            current_level: self.cfg.blind_generator.generate_level(0),
         };
 
         // main loop
@@ -131,16 +131,15 @@ impl TournamentDirector {
             if should_advance_level(&st, &self.cfg, total_chips) {
                 for t in &tables { let _ = t.send(TableCommand::PauseAfterHand).await; }
                 st.level_index += 1;
-                if let Some(next) = self.cfg.blind_levels.get(st.level_index).cloned() {
-                    for t in &tables {
-                        let _ = t.send(TableCommand::ApplyBlinds {
-                            level_id: next.level_id, small_blind: next.small_blind, big_blind: next.big_blind, ante: next.ante
-                        }).await;
-                    }
-                    for t in &tables { let _ = t.send(TableCommand::Resume).await; }
-                    st.level_started_at = std::time::Instant::now();
-                    st.current_level = next;
+                let next = self.cfg.blind_generator.generate_level(st.level_index);
+                for t in &tables {
+                    let _ = t.send(TableCommand::ApplyBlinds {
+                        level_id: next.level_id, small_blind: next.small_blind, big_blind: next.big_blind, ante: next.ante
+                    }).await;
                 }
+                for t in &tables { let _ = t.send(TableCommand::Resume).await; }
+                st.level_started_at = std::time::Instant::now();
+                st.current_level = next;
             }
 
         }

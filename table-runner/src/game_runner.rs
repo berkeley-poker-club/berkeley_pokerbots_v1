@@ -30,12 +30,12 @@ impl GameRunner {
 
     pub fn seat_player(&mut self, seat: SeatIndex, player: Box<dyn Player>, stack: i64) -> Result<(), String> {
         if seat >= self.state.rules.max_seats as SeatIndex {
-            return Err("Seat index out of bounds".to_string());
+            return Err("seat out of bounds".to_string());
         }
 
         let seat_state = &mut self.state.seats[seat as usize];
         if seat_state.player_id.is_some() {
-            return Err("Seat already occupied".to_string());
+            return Err("seat occupied".to_string());
         }
 
         let player_id = player.player_id();
@@ -136,7 +136,7 @@ impl GameRunner {
 
         self.broadcast_event(PublicEvent::CardsDealt {
             street: Street::Preflop,
-            cards: vec![], 
+            cards: vec![],
         }).await;
 
         Ok(())
@@ -320,12 +320,10 @@ impl GameRunner {
                     seat_state.status = SeatStatus::AllIn;
                 }
 
-                // Update betting state for raises
                 if matches!(valid_action.action, Action::Bet(_) | Action::Raise(_)) {
                     self.state.betting_state.to_call = seat_state.committed_this_street;
                     self.state.betting_state.last_raiser = Some(seat);
 
-                    // Reopen action for other players
                     let active_seats = self.get_active_seats();
                     for active_seat in active_seats {
                         if active_seat != seat && self.state.seats[active_seat as usize].can_act() {
