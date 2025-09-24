@@ -96,7 +96,6 @@ pub enum PlayerError {
     Timeout,
     CommunicationFailed,
     InvalidResponse,
-    Disconnected,
 }
 
 impl std::fmt::Display for PlayerError {
@@ -105,7 +104,6 @@ impl std::fmt::Display for PlayerError {
             PlayerError::Timeout => write!(f, "PlayerError::Timeout"),
             PlayerError::CommunicationFailed => write!(f, "PlayerError::CommunicationFailed"),
             PlayerError::InvalidResponse => write!(f, "PlayerError::InvalidResponse"),
-            PlayerError::Disconnected => write!(f, "PlayerError::Disconnected"),
         }
     }
 }

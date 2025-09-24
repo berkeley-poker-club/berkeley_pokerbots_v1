@@ -19,7 +19,6 @@ pub enum TableCommand {
     PauseAfterHand,
     Resume,
     CloseAfterHand,
-    ExtractPlayer { player_id: PlayerId },
     ExtractAllPlayers,
     FinishHandAndExtract { players: Vec<PlayerId> },
 }
@@ -31,7 +30,6 @@ pub enum TableEvent {
     TableSizes { table_id: TableId, active_count: usize },
     ReadyForReseat { table_id: TableId, open_seats: usize },
     LevelApplied { table_id: TableId, level_id: u32 },
-    PlayerExtracted { table_id: TableId, player_id: PlayerId }, // player ready for migration
     ExtractionFailed { table_id: TableId, player_id: PlayerId, reason: String },
     AllPlayersExtracted { table_id: TableId, players: Vec<PlayerId> },
     HandFinishedExtractionReady { table_id: TableId, players: Vec<PlayerId> }, // hand done; ready to move players
@@ -168,10 +166,6 @@ impl GameTable {
                         }
                         TableCommand::CloseAfterHand => {
                             should_close = true;
-                        }
-                        TableCommand::ExtractPlayer { player_id } => {
-                            let mut extractions = pending_extractions_clone.lock().await;
-                            extractions.push(player_id);
                         }
                         TableCommand::ExtractAllPlayers => {
                             let mut extract_all = extract_all_pending_clone.lock().await;
@@ -347,12 +341,7 @@ impl GameTable {
                 let mut registry = player_registry.lock().await;
                 registry.update_player_state(*player_id, PlayerState::Available);
                 drop(registry);
-
-                let mut queue = event_queue.lock().await;
-                queue.push_back(TableEvent::PlayerExtracted {
-                    table_id,
-                    player_id: *player_id
-                });
+                
             } else {
                 let mut queue = event_queue.lock().await;
                 queue.push_back(TableEvent::ExtractionFailed {

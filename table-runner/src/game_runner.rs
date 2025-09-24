@@ -368,7 +368,7 @@ impl GameRunner {
             stacks: self.state.seats.iter().map(|s| s.stack).collect(),
             committed_this_street: self.state.seats.iter().map(|s| s.committed_this_street).collect(),
             seat_statuses: self.state.seats.iter().map(|s| s.status.clone()).collect(),
-            action_history: vec![], // TODO: track action history
+            action_history: vec![], // TODO: track action history maybe?
         }
     }
 
@@ -398,7 +398,7 @@ impl GameRunner {
             let player_guard = player.lock().await;
             player_guard.request_action(context, legal, 1000).await
         } else {
-            Err(PlayerError::Disconnected)
+            Err(PlayerError::CommunicationFailed)
         }
     }
 

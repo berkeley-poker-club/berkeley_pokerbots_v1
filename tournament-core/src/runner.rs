@@ -73,7 +73,6 @@ impl TournamentDirector {
 
         rebalance_start(&mut seat_lists, self.cfg.min_table_size);
 
-        // Start all tables
         for t in &tables {
             t.start().await;
         }
@@ -130,13 +129,6 @@ impl TournamentDirector {
                         }
                         TableEvent::ReadyForReseat { .. } |
                         TableEvent::LevelApplied { .. } => {  }
-                        TableEvent::PlayerExtracted { table_id, player_id } => {
-                            if let Some(target_table_id) = self.find_target_table_for_migration(&st, table_id) {
-                                let _ = tables.iter().find(|t| t.id() == target_table_id)
-                                    .unwrap()
-                                    .send(TableCommand::SeatPlayer { player_id }).await;
-                            }
-                        }
                         TableEvent::ExtractionFailed { table_id: _, player_id, reason: _ } => {
                             let mut registry = self.player_registry.lock().await;
                             registry.rollback_migration(player_id);
@@ -144,15 +136,12 @@ impl TournamentDirector {
                         TableEvent::AllPlayersExtracted { table_id, players } => {
                             self.redistribute_players(&tables, &players).await;
 
-                            // Mark table as closed and remove from active tables
                             if let Some(table_meta) = st.tables.iter_mut().find(|t| t.id == table_id) {
                                 table_meta.status_running = false;
                             }
 
-                            // Remove the broken table from active tables list
                             st.tables.retain(|t| t.id != table_id);
 
-                            // Cleanly close the broken table
                             if let Some(broken_table) = tables.iter().find(|t| t.id() == table_id) {
                                 let _ = broken_table.send(TableCommand::CloseAfterHand).await;
                             }
@@ -173,14 +162,17 @@ impl TournamentDirector {
                     drop(registry);
 
                     if !players_at_table.is_empty() {
-                        if let Some(target_table_id) = self.find_target_table_for_breaking(&st, t.id()) {
+                        if self.has_available_table_capacity(&st, t.id()) {
                             let mut registry = self.player_registry.lock().await;
                             for player_id in &players_at_table {
-                                let _ = registry.start_migration(*player_id, t.id(), target_table_id);
+                                let _ = registry.start_migration(*player_id, t.id(), 0); // dummy target, will be set during redistribution
                             }
                             drop(registry);
 
                             let _ = t.send(TableCommand::ExtractAllPlayers).await;
+                        } else {
+                            // this should not happen
+                            eprintln!("WARNING: no table capacity for breaking table {}", t.id());
                         }
                     } else {
                         let _ = t.send(TableCommand::CloseAfterHand).await;
@@ -211,20 +203,11 @@ impl TournamentDirector {
         finalize_placements(st.eliminated, last)
     }
 
-    fn find_target_table_for_migration(&self, tournament_state: &TournamentState, source_table_id: TableId) -> Option<TableId> {
-        tournament_state.tables.iter()
-            .filter(|t| t.id != source_table_id && t.status_running)
-            .filter(|t| t.active_count < t.capacity)
-            .max_by_key(|t| t.capacity - t.active_count)
-            .map(|t| t.id)
-    }
 
-    fn find_target_table_for_breaking(&self, tournament_state: &TournamentState, breaking_table_id: TableId) -> Option<TableId> {
+    fn has_available_table_capacity(&self, tournament_state: &TournamentState, excluding_table_id: TableId) -> bool {
         tournament_state.tables.iter()
-            .filter(|t| t.id != breaking_table_id && t.status_running)
-            .filter(|t| t.active_count < t.capacity)
-            .max_by_key(|t| t.capacity - t.active_count)
-            .map(|t| t.id)
+            .filter(|t| t.id != excluding_table_id && t.status_running)
+            .any(|t| t.active_count < t.capacity)
     }
 
     async fn redistribute_players<H: TableHandle>(&mut self, tables: &[H], players: &[PlayerId]) {
@@ -241,7 +224,11 @@ impl TournamentDirector {
         }
 
         if available_tables.is_empty() {
-            eprintln!("WARNING: No available tables for redistribution of {} players", players.len());
+            // rollback all player migrations since we can't redistribute them
+            let mut registry = self.player_registry.lock().await;
+            for &player_id in players {
+                registry.rollback_migration(player_id);
+            }
             return;
         }
 
@@ -263,9 +250,18 @@ impl TournamentDirector {
                     if let Some((_, available_space)) = available_tables.iter_mut().find(|(t, _)| t.id() == table_id) {
                         *available_space -= 1;
                     }
+
+                } else {
+                    // this should not happen
+                    eprintln!("ERROR: table {} not found for player {}", table_id, player_id);
+                    let mut registry = self.player_registry.lock().await;
+                    registry.rollback_migration(player_id);
                 }
             } else {
-                eprintln!("WARNING: no table capacity, could not redistribute player {}", player_id);
+                // this should not happen
+                eprintln!("ERROR: ran out of table capacity during redistribution for player {}", player_id);
+                let mut registry = self.player_registry.lock().await;
+                registry.rollback_migration(player_id);
             }
         }
     }
