@@ -1,0 +1,71 @@
+# Example configuration for competition-api / tournament-worker.
+# Copy to pokerbots.toml. Every field is optional; see docs/OPERATIONS.md.
+
+[server]
+bind = "0.0.0.0:8080"
+admin_key = "change-me-please"
+embedded_workers = 1
+smoke_wait_ms = 30000
+
+[storage]
+database = "data/pokerbots.db"
+artifacts_dir = "data/artifacts"
+logs_dir = "data/logs"
+
+[worker]
+concurrency = 2
+poll_interval_ms = 1000
+heartbeat_secs = 20
+stale_job_secs = 300
+
+[sandbox]
+kind = "process"        # "docker" for real isolation
+memory_mb = 512
+cpu_seconds = 1800
+max_pids = 64
+max_open_files = 256
+python = "python3"
+
+[sandbox.docker]
+binary = "docker"
+cpus = 1.0
+
+[sandbox.docker.images]
+python3 = "python:3.12-slim"
+node = "node:22-slim"
+java = "eclipse-temurin:21-jre"
+native = "debian:bookworm-slim"
+
+[scheduler]
+enabled = true
+poll_secs = 30
+
+[defaults]
+nightly_enabled = true
+nightly_time_utc = "07:00"
+nightly_series_length = 100
+ondemand_runs_per_team_per_day = 2
+ondemand_max_series_length = 10
+smoke_timeout_ms = 10000
+max_upload_bytes = 52428800
+registration_open = true
+record_hands = false
+
+[defaults.tournament]
+table_size = 9
+break_threshold = 7
+min_table_size = 6
+starting_stack = 1000
+action_timeout_ms = 1000
+series_length = 100
+rng_seed = 42
+
+[defaults.tournament.blinds]
+type = "geometric"
+starting_small = 5
+starting_big = 10
+multiplier = 1.5
+
+[defaults.tournament.level_advance]
+max_level_duration_secs = 120
+hands_per_level = 20

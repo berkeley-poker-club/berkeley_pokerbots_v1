@@ -1,32 +1,42 @@
-use serde::{Deserialize, Serialize};
-use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
-use std::fmt;
+//! Cards, ranks, suits and decks.
+//!
+//! `Card` serialises to/from the conventional two-character string form (`"As"`, `"Td"`)
+//! so that the bot protocol is human readable.
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+use std::str::FromStr;
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Card(u8);
+
+impl fmt::Debug for Card {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
 
 impl Card {
     pub fn new(rank: Rank, suit: Suit) -> Self {
         Card((rank as u8) * 4 + (suit as u8))
     }
 
-    pub fn rank(self) -> Rank {
-        match self.0 / 4 {
-            0 => Rank::Two,
-            1 => Rank::Three,
-            2 => Rank::Four,
-            3 => Rank::Five,
-            4 => Rank::Six,
-            5 => Rank::Seven,
-            6 => Rank::Eight,
-            7 => Rank::Nine,
-            8 => Rank::Ten,
-            9 => Rank::Jack,
-            10 => Rank::Queen,
-            11 => Rank::King,
-            12 => Rank::Ace,
-            _ => panic!("Invalid card value"),
+    /// Construct from a raw index in `0..52` (rank-major).
+    pub fn from_index(idx: u8) -> Option<Self> {
+        if idx < 52 {
+            Some(Card(idx))
+        } else {
+            None
         }
+    }
+
+    pub fn index(self) -> u8 {
+        self.0
+    }
+
+    pub fn rank(self) -> Rank {
+        Rank::from_u8(self.0 / 4).expect("card index in range")
     }
 
     pub fn suit(self) -> Suit {
@@ -34,72 +44,46 @@ impl Card {
             0 => Suit::Clubs,
             1 => Suit::Diamonds,
             2 => Suit::Hearts,
-            3 => Suit::Spades,
-            _ => unreachable!(),
+            _ => Suit::Spades,
         }
     }
 
-    pub fn from_str(s: &str) -> Result<Self, CardParseError> {
-        if s.len() != 2 {
+    /// All 52 cards in rank-major order.
+    pub fn all() -> Vec<Card> {
+        (0..52).map(Card).collect()
+    }
+}
+
+impl FromStr for Card {
+    type Err = CardParseError;
+
+    fn from_str(s: &str) -> Result<Self, CardParseError> {
+        let chars: Vec<char> = s.trim().chars().collect();
+        if chars.len() != 2 {
             return Err(CardParseError::InvalidLength);
         }
-
-        let chars: Vec<char> = s.chars().collect();
-        let rank = match chars[0] {
-            '2' => Rank::Two,
-            '3' => Rank::Three,
-            '4' => Rank::Four,
-            '5' => Rank::Five,
-            '6' => Rank::Six,
-            '7' => Rank::Seven,
-            '8' => Rank::Eight,
-            '9' => Rank::Nine,
-            'T' | 't' => Rank::Ten,
-            'J' | 'j' => Rank::Jack,
-            'Q' | 'q' => Rank::Queen,
-            'K' | 'k' => Rank::King,
-            'A' | 'a' => Rank::Ace,
-            _ => return Err(CardParseError::InvalidRank),
-        };
-
-        let suit = match chars[1] {
-            'c' | 'C' => Suit::Clubs,
-            'd' | 'D' => Suit::Diamonds,
-            'h' | 'H' => Suit::Hearts,
-            's' | 'S' => Suit::Spades,
-            _ => return Err(CardParseError::InvalidSuit),
-        };
-
+        let rank = Rank::from_char(chars[0]).ok_or(CardParseError::InvalidRank)?;
+        let suit = Suit::from_char(chars[1]).ok_or(CardParseError::InvalidSuit)?;
         Ok(Card::new(rank, suit))
     }
 }
 
 impl fmt::Display for Card {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let rank_char = match self.rank() {
-            Rank::Two => '2',
-            Rank::Three => '3',
-            Rank::Four => '4',
-            Rank::Five => '5',
-            Rank::Six => '6',
-            Rank::Seven => '7',
-            Rank::Eight => '8',
-            Rank::Nine => '9',
-            Rank::Ten => 'T',
-            Rank::Jack => 'J',
-            Rank::Queen => 'Q',
-            Rank::King => 'K',
-            Rank::Ace => 'A',
-        };
+        write!(f, "{}{}", self.rank().to_char(), self.suit().to_char())
+    }
+}
 
-        let suit_char = match self.suit() {
-            Suit::Clubs => 'c',
-            Suit::Diamonds => 'd',
-            Suit::Hearts => 'h',
-            Suit::Spades => 's',
-        };
+impl Serialize for Card {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
 
-        write!(f, "{}{}", rank_char, suit_char)
+impl<'de> Deserialize<'de> for Card {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -120,7 +104,66 @@ pub enum Rank {
     Ace = 12,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Rank {
+    pub const ALL: [Rank; 13] = [
+        Rank::Two,
+        Rank::Three,
+        Rank::Four,
+        Rank::Five,
+        Rank::Six,
+        Rank::Seven,
+        Rank::Eight,
+        Rank::Nine,
+        Rank::Ten,
+        Rank::Jack,
+        Rank::Queen,
+        Rank::King,
+        Rank::Ace,
+    ];
+
+    pub fn from_u8(v: u8) -> Option<Rank> {
+        Rank::ALL.get(v as usize).copied()
+    }
+
+    pub fn from_char(c: char) -> Option<Rank> {
+        Some(match c.to_ascii_uppercase() {
+            '2' => Rank::Two,
+            '3' => Rank::Three,
+            '4' => Rank::Four,
+            '5' => Rank::Five,
+            '6' => Rank::Six,
+            '7' => Rank::Seven,
+            '8' => Rank::Eight,
+            '9' => Rank::Nine,
+            'T' => Rank::Ten,
+            'J' => Rank::Jack,
+            'Q' => Rank::Queen,
+            'K' => Rank::King,
+            'A' => Rank::Ace,
+            _ => return None,
+        })
+    }
+
+    pub fn to_char(self) -> char {
+        match self {
+            Rank::Two => '2',
+            Rank::Three => '3',
+            Rank::Four => '4',
+            Rank::Five => '5',
+            Rank::Six => '6',
+            Rank::Seven => '7',
+            Rank::Eight => '8',
+            Rank::Nine => '9',
+            Rank::Ten => 'T',
+            Rank::Jack => 'J',
+            Rank::Queen => 'Q',
+            Rank::King => 'K',
+            Rank::Ace => 'A',
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Suit {
     Clubs = 0,
     Diamonds = 1,
@@ -128,67 +171,134 @@ pub enum Suit {
     Spades = 3,
 }
 
-#[derive(Debug)]
+impl Suit {
+    pub fn from_char(c: char) -> Option<Suit> {
+        Some(match c.to_ascii_lowercase() {
+            'c' => Suit::Clubs,
+            'd' => Suit::Diamonds,
+            'h' => Suit::Hearts,
+            's' => Suit::Spades,
+            _ => return None,
+        })
+    }
+
+    pub fn to_char(self) -> char {
+        match self {
+            Suit::Clubs => 'c',
+            Suit::Diamonds => 'd',
+            Suit::Hearts => 'h',
+            Suit::Spades => 's',
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CardParseError {
+    #[error("card string must be exactly two characters, e.g. \"As\"")]
     InvalidLength,
+    #[error("invalid rank character (expected 2-9, T, J, Q, K or A)")]
     InvalidRank,
+    #[error("invalid suit character (expected c, d, h or s)")]
     InvalidSuit,
 }
 
-impl fmt::Display for CardParseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CardParseError::InvalidLength => write!(f, "CardParseError::InvalidLength"),
-            CardParseError::InvalidRank => write!(f, "CardParseError::InvalidRank"),
-            CardParseError::InvalidSuit => write!(f, "CardParseError::InvalidSuit"),
-        }
-    }
-}
-
-impl std::error::Error for CardParseError {}
-
+/// A deck of cards. Cards are dealt from the *front* (index 0 first), so a deck built with
+/// [`Deck::from_cards`] deals in exactly the order given — handy for scripted tests.
 #[derive(Clone, Debug)]
 pub struct Deck {
     cards: Vec<Card>,
-    rng: StdRng,
+    next: usize,
 }
 
 impl Deck {
+    /// Full 52-card deck shuffled with a deterministic seed.
     pub fn new(seed: u64) -> Self {
-        let mut cards = Vec::with_capacity(52);
-        for rank in 0..13 {
-            for suit in 0..4 {
-                cards.push(Card(rank * 4 + suit));
-            }
-        }
-
-        let mut deck = Deck {
-            cards,
-            rng: StdRng::seed_from_u64(seed),
-        };
-        deck.shuffle();
-        deck
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut cards = Card::all();
+        cards.shuffle(&mut rng);
+        Deck { cards, next: 0 }
     }
 
-    pub fn shuffle(&mut self) {
-        self.cards.shuffle(&mut self.rng);
+    /// Deck that deals the given cards in order (may be partial; dealing past the end yields `None`).
+    pub fn from_cards(cards: Vec<Card>) -> Self {
+        Deck { cards, next: 0 }
+    }
+
+    /// Like [`Deck::from_cards`] but the given cards are dealt first and the remainder of the 52-card
+    /// deck follows in a seeded-random order. Convenient for tests that only care about a few cards.
+    pub fn rigged(first: &[Card], seed: u64) -> Self {
+        let mut rest = Deck::new(seed).cards;
+        rest.retain(|c| !first.contains(c));
+        let mut cards = first.to_vec();
+        cards.extend(rest);
+        Deck { cards, next: 0 }
     }
 
     pub fn deal(&mut self) -> Option<Card> {
-        self.cards.pop()
+        let c = self.cards.get(self.next).copied();
+        if c.is_some() {
+            self.next += 1;
+        }
+        c
     }
 
     pub fn remaining(&self) -> usize {
-        self.cards.len()
+        self.cards.len().saturating_sub(self.next)
+    }
+}
+
+/// Parse a whitespace-separated list of cards, e.g. `"As Kd Qh"`.
+pub fn parse_cards(s: &str) -> Result<Vec<Card>, CardParseError> {
+    s.split_whitespace().map(|t| t.parse()).collect()
+}
+
+/// Convenience macro-free helper for tests: `card("As")`.
+pub fn card(s: &str) -> Card {
+    s.parse().expect("valid card literal")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_all_cards() {
+        for c in Card::all() {
+            let s = c.to_string();
+            assert_eq!(s.parse::<Card>().unwrap(), c);
+            let json = serde_json::to_string(&c).unwrap();
+            assert_eq!(json, format!("\"{}\"", s));
+            let back: Card = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, c);
+        }
     }
 
-    pub fn reset(&mut self) {
-        self.cards.clear();
-        for rank in 0..13 {
-            for suit in 0..4 {
-                self.cards.push(Card(rank * 4 + suit));
-            }
+    #[test]
+    fn deck_is_deterministic_and_complete() {
+        let mut a = Deck::new(7);
+        let mut b = Deck::new(7);
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..52 {
+            let ca = a.deal().unwrap();
+            let cb = b.deal().unwrap();
+            assert_eq!(ca, cb);
+            assert!(seen.insert(ca));
         }
-        self.shuffle();
+        assert!(a.deal().is_none());
+        assert_eq!(seen.len(), 52);
+    }
+
+    #[test]
+    fn rigged_deck_deals_requested_cards_first_then_rest() {
+        let mut d = Deck::rigged(&[card("As"), card("Ah")], 1);
+        assert_eq!(d.deal(), Some(card("As")));
+        assert_eq!(d.deal(), Some(card("Ah")));
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(card("As"));
+        seen.insert(card("Ah"));
+        while let Some(c) = d.deal() {
+            assert!(seen.insert(c));
+        }
+        assert_eq!(seen.len(), 52);
     }
 }

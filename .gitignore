@@ -2,3 +2,9 @@
 .idea/*
 /CLAUDE.md
 /.claude/
+/data/
+/pokerbots.toml
+*.db
+*.db-wal
+*.db-shm
+hands.jsonl

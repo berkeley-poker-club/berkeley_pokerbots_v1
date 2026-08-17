@@ -1,0 +1,671 @@
+openapi: 3.1.0
+info:
+  title: Pokerbots Competition API
+  version: "1.0.0"
+  description: |
+    Student-facing and admin API for the Berkeley Pokerbots competition.
+
+    * Base path: `/api/v1`
+    * Auth: `X-Api-Key: <team_api_key>` **or** `Authorization: Bearer <team_api_key>`.
+      Admin routes accept `X-Admin-Key: <admin_key>` or the key of a team flagged `is_admin`.
+    * Errors always use the envelope `{ "error": { "code", "message", "details" } }` with codes
+      `unauthorized`, `forbidden`, `not_found`, `validation_error`, `conflict`, `rate_limited`,
+      `payload_too_large`, `not_ready`, `internal_error`.
+    * Bot protocol: see `docs/BOT_PROTOCOL.md`.
+servers:
+  - url: /api/v1
+tags:
+  - name: auth
+  - name: submissions
+  - name: runs
+  - name: leaderboard
+  - name: admin
+  - name: system
+
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    Bearer:
+      type: http
+      scheme: bearer
+    AdminKey:
+      type: apiKey
+      in: header
+      name: X-Admin-Key
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+    TeamMember:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        email: { type: string, nullable: true }
+        student_id: { type: string, nullable: true }
+    Manifest:
+      type: object
+      required: [entrypoint]
+      properties:
+        language: { type: string, default: other, description: "python | rust | cpp | java | other (informational)" }
+        entrypoint: { type: string, description: "Path inside the artifact, e.g. bot.py or ./bot" }
+        runtime: { type: string, default: auto, enum: [auto, native, python3, node, java] }
+        args: { type: array, items: { type: string }, default: [] }
+        notes: { type: string, nullable: true }
+        protocol_version: { type: string, default: "1" }
+    SmokeReport:
+      type: object
+      properties:
+        passed: { type: boolean }
+        first_latency_ms: { type: integer }
+        latency_ms: { type: integer }
+        reason: { type: string, nullable: true, enum: [timeout, invalid_json, illegal_action, crashed, setup_failed, null] }
+        message: { type: string }
+        stderr_tail: { type: string }
+        actions: { type: array, items: { $ref: '#/components/schemas/Action' } }
+    Action:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [Fold, Check, Call, BetTo, RaiseTo, AllIn] }
+        amount: { type: integer, description: "Required for BetTo/RaiseTo: total committed on this street after acting" }
+    Submission:
+      type: object
+      properties:
+        submission_id: { type: string, example: sub_tm_ab12cd34ef56_0007 }
+        team_id: { type: string }
+        seq: { type: integer }
+        status: { type: string, enum: [pending, validated, rejected, deleted] }
+        protocol_version: { type: string }
+        manifest: { $ref: '#/components/schemas/Manifest' }
+        artifact_sha256: { type: string }
+        artifact_size: { type: integer }
+        created_at: { type: string, format: date-time }
+        validated_at: { type: string, format: date-time, nullable: true }
+        smoke_test: { $ref: '#/components/schemas/SmokeReport', nullable: true }
+        active: { type: boolean }
+    TournamentConfig:
+      type: object
+      description: Engine configuration (see SPEC.md). All fields optional when patching.
+      properties:
+        table_size: { type: integer, default: 9 }
+        break_threshold: { type: integer, default: 7 }
+        min_table_size: { type: integer, default: 6 }
+        starting_stack: { type: integer, default: 1000 }
+        blinds:
+          type: object
+          description: "{type: geometric, starting_small, starting_big, multiplier, ante_starts_at_level?, ante_fraction_of_bb?} or {type: levels, levels: [...]}"
+        level_advance:
+          type: object
+          properties:
+            max_level_duration_secs: { type: integer, nullable: true }
+            hands_per_level: { type: integer, nullable: true, description: "advance when the average hands per table in the level reaches this" }
+            avg_stack_thresholds: { type: array, items: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 } }
+        action_timeout_ms: { type: integer, default: 1000 }
+        series_length: { type: integer, default: 100 }
+        rng_seed: { type: integer }
+        max_hands_per_table: { type: integer, nullable: true }
+    RunProgress:
+      type: object
+      properties:
+        tournaments_total: { type: integer }
+        tournaments_completed: { type: integer }
+        tournaments_failed_or_cancelled: { type: integer }
+    Run:
+      type: object
+      properties:
+        run_id: { type: string, example: run_9f8e7d6c5b4a }
+        kind: { type: string, enum: [nightly, ondemand] }
+        status: { type: string, enum: [queued, running, finalizing, completed, failed, cancelled] }
+        config:
+          type: object
+          properties:
+            series_length: { type: integer }
+            table_size: { type: integer }
+            seed: { type: integer }
+            action_timeout_ms: { type: integer }
+            starting_stack: { type: integer }
+            record_hands: { type: boolean }
+            tournament: { $ref: '#/components/schemas/TournamentConfig' }
+        participant_count: { type: integer }
+        created_by: { type: string, description: "team id, 'admin' or 'scheduler'" }
+        created_at: { type: string, format: date-time }
+        snapshot_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        error: { type: string, nullable: true }
+        nightly_date: { type: string, nullable: true }
+        progress: { $ref: '#/components/schemas/RunProgress' }
+        participants:
+          type: array
+          description: Only on GET /runs/{run_id}
+          items:
+            type: object
+            properties:
+              team_id: { type: string }
+              team_name: { type: string }
+              submission_id: { type: string }
+    TournamentSummary:
+      type: object
+      properties:
+        index: { type: integer }
+        seed: { type: integer }
+        status: { type: string, enum: [queued, running, completed, failed, cancelled] }
+        started_at: { type: string, nullable: true }
+        finished_at: { type: string, nullable: true }
+        worker_id: { type: string, nullable: true }
+        total_hands: { type: integer, nullable: true }
+        winner_team_id: { type: string, nullable: true }
+        winner_team_name: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+    TournamentDetail:
+      allOf:
+        - $ref: '#/components/schemas/TournamentSummary'
+        - type: object
+          properties:
+            placements:
+              type: array
+              items:
+                type: object
+                properties:
+                  team_id: { type: string }
+                  team_name: { type: string, nullable: true }
+                  place: { type: integer, description: "1 = winner; ties share a place" }
+                  hands_played: { type: integer }
+            eliminations: { type: array, items: { type: object } }
+            levels_reached: { type: integer, nullable: true }
+            duration_ms: { type: integer, nullable: true }
+            spawn_failures: { type: array, nullable: true, items: { type: object } }
+            hand_log_url: { type: string, nullable: true, description: "Present when hand histories were recorded (admin only)" }
+    LeaderboardEntry:
+      type: object
+      properties:
+        rank: { type: integer }
+        team_id: { type: string }
+        team_name: { type: string, nullable: true }
+        submission_id: { type: string, nullable: true }
+        geo_mean_placement: { type: number, description: "Geometric mean of placements; lower is better" }
+        tournaments_counted: { type: integer }
+    Leaderboard:
+      type: object
+      properties:
+        run_id: { type: string, nullable: true }
+        kind: { type: string, nullable: true }
+        updated_at: { type: string, format: date-time, nullable: true }
+        participant_count: { type: integer }
+        series_length: { type: integer }
+        total_entries: { type: integer }
+        entries: { type: array, items: { $ref: '#/components/schemas/LeaderboardEntry' } }
+    PlatformSettings:
+      type: object
+      properties:
+        tournament: { $ref: '#/components/schemas/TournamentConfig' }
+        nightly_enabled: { type: boolean }
+        nightly_time_utc: { type: string, example: "07:00" }
+        nightly_series_length: { type: integer }
+        ondemand_runs_per_team_per_day: { type: integer }
+        ondemand_max_series_length: { type: integer }
+        smoke_timeout_ms: { type: integer }
+        max_upload_bytes: { type: integer }
+        registration_open: { type: boolean }
+        record_hands: { type: boolean }
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Forbidden:
+      description: Not allowed
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Conflict
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Validation:
+      description: Validation error
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+security:
+  - ApiKey: []
+  - Bearer: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      security: []
+      summary: Create a team and receive its API key (shown once)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_name]
+              properties:
+                team_name: { type: string, minLength: 2, maxLength: 40 }
+                members: { type: array, items: { $ref: '#/components/schemas/TeamMember' } }
+      responses:
+        "201":
+          description: Team created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id: { type: string }
+                  team_name: { type: string }
+                  api_key: { type: string, example: pb_live_... }
+                  created_at: { type: string, format: date-time }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "409": { $ref: '#/components/responses/Conflict' }
+        "422": { $ref: '#/components/responses/Validation' }
+  /me:
+    get:
+      tags: [auth]
+      summary: Team profile, active submission and rate-limit status
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id: { type: string }
+                  team_name: { type: string }
+                  api_key_prefix: { type: string }
+                  is_admin: { type: boolean }
+                  suspended: { type: boolean }
+                  members: { type: array, items: { $ref: '#/components/schemas/TeamMember' } }
+                  active_submission_id: { type: string, nullable: true }
+                  rate_limits:
+                    type: object
+                    properties:
+                      ondemand_runs_per_day: { type: integer }
+                      ondemand_runs_remaining: { type: integer }
+                      ondemand_max_series_length: { type: integer }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+  /teams/{team_id}/rotate-key:
+    post:
+      tags: [auth]
+      summary: Rotate the team API key (own team, or admin)
+      parameters: [{ name: team_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: New key
+          content:
+            application/json:
+              schema: { type: object, properties: { team_id: { type: string }, api_key: { type: string } } }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /teams/{team_id}/stats:
+    get:
+      tags: [leaderboard]
+      summary: Placement history and recent scores of a team
+      parameters: [{ name: team_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id: { type: string }
+                  team_name: { type: string }
+                  active_submission_id: { type: string, nullable: true }
+                  recent_scores: { type: array, items: { type: object } }
+                  recent_placements: { type: array, items: { type: object } }
+                  summary:
+                    type: object
+                    properties:
+                      tournaments_played: { type: integer }
+                      best_place: { type: integer, nullable: true }
+                      average_place: { type: number, nullable: true }
+                      wins: { type: integer }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /submissions:
+    post:
+      tags: [submissions]
+      summary: Upload a bot artifact (multipart) and run the protocol smoke test
+      description: |
+        `artifact`: a zip archive or a single file (max `max_upload_bytes`, default 50 MB).
+        `manifest`: JSON string (see Manifest). Zips whose only top-level entry is a folder are
+        hoisted automatically. On success the submission is `validated` but **not active** until
+        `POST /submissions/{id}/activate`.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [artifact, manifest]
+              properties:
+                artifact: { type: string, format: binary }
+                manifest: { type: string, description: JSON-encoded Manifest }
+      responses:
+        "201":
+          description: Validated
+          content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } }
+        "202":
+          description: Accepted but the smoke test has not finished yet (no worker available); poll GET /submissions/{id}
+          content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } }
+        "413":
+          description: Artifact too large
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        "422":
+          description: Smoke test failed or manifest invalid. `details` carries `submission_id`, `reason` (timeout | invalid_json | illegal_action | crashed | setup_failed), `message`, `stderr_tail`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    get:
+      tags: [submissions]
+      summary: List own submissions (newest first)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: cursor, in: query, schema: { type: integer }, description: "seq cursor from next_cursor" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  submissions: { type: array, items: { $ref: '#/components/schemas/Submission' } }
+                  next_cursor: { type: integer, nullable: true }
+                  active_submission_id: { type: string, nullable: true }
+  /submissions/{submission_id}:
+    parameters: [{ name: submission_id, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [submissions]
+      summary: Submission metadata (own team only)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } } }
+        "404": { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [submissions]
+      summary: Soft-delete an inactive submission
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/Conflict' }
+  /submissions/{submission_id}/activate:
+    post:
+      tags: [submissions]
+      summary: Make this the team's single active bot (deactivates the previous one)
+      parameters: [{ name: submission_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Activated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  team_id: { type: string }
+                  active_submission_id: { type: string }
+                  previous_submission_id: { type: string, nullable: true }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "409": { $ref: '#/components/responses/Conflict' }
+
+  /runs:
+    get:
+      tags: [runs]
+      security: []
+      summary: List runs
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string, enum: [nightly, ondemand] } }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+        - { name: cursor, in: query, schema: { type: string }, description: created_at cursor }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs: { type: array, items: { $ref: '#/components/schemas/Run' } }
+                  next_cursor: { type: string, nullable: true }
+    post:
+      tags: [runs]
+      summary: Enqueue an on-demand run using the current active-bot snapshot
+      description: Teams are rate limited (`ondemand_runs_per_team_per_day`, `ondemand_max_series_length`); admins are not.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [ondemand, nightly], default: ondemand, description: nightly requires admin }
+                mode: { type: string, enum: [series, single], default: series }
+                series_length: { type: integer }
+                include_inactive: { type: boolean, default: false, description: must be false }
+                seed: { type: integer, nullable: true }
+      responses:
+        "202": { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "422": { $ref: '#/components/responses/Validation' }
+        "429":
+          description: Rate limited
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /runs/{run_id}:
+    get:
+      tags: [runs]
+      security: []
+      summary: Run detail with progress and participants
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } } }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /runs/{run_id}/cancel:
+    post:
+      tags: [runs, admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Cancel a run (admin)
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Cancelled, content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } } }
+        "409": { $ref: '#/components/responses/Conflict' }
+  /runs/{run_id}/tournaments:
+    get:
+      tags: [runs]
+      security: []
+      summary: Per-tournament summary
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: { type: string }
+                  tournaments: { type: array, items: { $ref: '#/components/schemas/TournamentSummary' } }
+  /runs/{run_id}/tournaments/{index}:
+    get:
+      tags: [runs]
+      security: []
+      summary: Tournament detail with placements
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/TournamentDetail' } } } }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /runs/{run_id}/tournaments/{index}/hands:
+    get:
+      tags: [runs, admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Hand history (JSON lines) — admin only, only when record_hands was enabled
+      parameters:
+        - { name: run_id, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: application/x-ndjson stream }
+        "404": { $ref: '#/components/responses/NotFound' }
+
+  /leaderboard:
+    get:
+      tags: [leaderboard]
+      security: []
+      summary: Public leaderboard (latest completed nightly run by default)
+      parameters:
+        - { name: run_id, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 200 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Leaderboard' } } } }
+  /leaderboard/history:
+    get:
+      tags: [leaderboard]
+      security: []
+      summary: Past nightly boards (top 3 each)
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 30 } }
+        - { name: kind, in: query, schema: { type: string, enum: [nightly, ondemand], default: nightly } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  boards: { type: array, items: { $ref: '#/components/schemas/Leaderboard' } }
+
+  /admin/config:
+    get:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Current platform settings
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSettings' } } } }
+    patch:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Deep-merge a partial settings object
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSettings' } } }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/PlatformSettings' } } } }
+        "422": { $ref: '#/components/responses/Validation' }
+  /admin/teams:
+    get:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: List teams
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Provision a team (works even when registration is closed)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_name]
+              properties:
+                team_name: { type: string }
+                members: { type: array, items: { $ref: '#/components/schemas/TeamMember' } }
+                is_admin: { type: boolean, default: false }
+      responses:
+        "201": { description: Created (includes api_key) }
+        "409": { $ref: '#/components/responses/Conflict' }
+  /admin/teams/{team_id}/suspend:
+    post:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Suspend (or reinstate) a team; suspended teams are excluded from runs
+      parameters: [{ name: team_id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { suspended: { type: boolean, default: true } } }
+      responses:
+        "200": { description: OK }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /admin/workers:
+    get:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Worker heartbeats and queue depth
+      responses:
+        "200": { description: OK }
+  /admin/revalidate/{submission_id}:
+    post:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Re-run the smoke test for a submission
+      parameters: [{ name: submission_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "202": { description: Queued }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /admin/metrics:
+    get:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: JSON ops metrics (counts, queue depth, workers)
+      responses:
+        "200": { description: OK }
+  /admin/runs/nightly:
+    post:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Trigger a nightly-style series now (full active snapshot)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { series_length: { type: integer }, seed: { type: integer } } }
+      responses:
+        "202": { description: Queued, content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } } }
+  /admin/runs/{run_id}/jobs:
+    get:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Jobs belonging to a run (debugging)
+      parameters: [{ name: run_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: OK }
+
+  /health:
+    get:
+      tags: [system]
+      security: []
+      summary: Liveness
+      responses:
+        "200": { description: OK }
+  /ready:
+    get:
+      tags: [system]
+      security: []
+      summary: Readiness (database + artifact store; reports live worker count)
+      responses:
+        "200": { description: Ready }
+        "503": { description: Not ready }
+  /openapi.yaml:
+    get:
+      tags: [system]
+      security: []
+      summary: This document
+      responses:
+        "200": { description: OK }

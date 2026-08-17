@@ -1,13 +1,23 @@
 [package]
 name = "table-runner"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+description = "Async table driver: connects the poker engine to bots (in-process or JSON-lines subprocesses)"
+license = "MIT"
 
 [dependencies]
-serde = { version = "1.0.225", features = ["derive"] }
-serde_json = "1.0.125"
-async-trait = "0.1.89"
-anyhow = "1.0.99"
-tokio = { version = "1.47.1", features = ["full"] }
 poker-utils = { path = "../poker-utils" }
-rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs"] }
+rand = "0.9"
+tracing = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
