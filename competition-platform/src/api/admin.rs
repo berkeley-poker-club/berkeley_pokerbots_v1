@@ -163,12 +163,24 @@ pub async fn revalidate(
         &json!({ "submission_id": sub.id }),
         None,
         10,
-        1,
+        2,
     )?;
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({ "submission_id": sub.id, "job_id": job_id })),
     ))
+}
+
+/// `GET /admin/autoscale` — the current scaling plan and the last action the autoscaler took.
+pub async fn autoscale(State(state): State<SharedState>, _admin: Admin) -> ApiResult<Json<Value>> {
+    let settings = state.store.settings()?;
+    let plan = crate::autoscale::plan(&state.store, &settings.autoscale)?;
+    let status = state.store.get_setting("autoscale_status")?;
+    Ok(Json(json!({
+        "settings": settings.autoscale,
+        "plan": plan,
+        "last_action": status,
+    })))
 }
 
 /// `GET /admin/metrics`

@@ -120,6 +120,37 @@ fn python_bot_zip(script: &str) -> Vec<u8> {
     zip_of(&[("pokerbots_sdk.py", sdk), (script, bot)])
 }
 
+fn multipart_with_activate(
+    key: &str,
+    artifact: &[u8],
+    manifest: &Value,
+    activate: bool,
+) -> Request<Body> {
+    let boundary = "----pokerbotsboundary42";
+    let mut body: Vec<u8> = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"manifest\"\r\nContent-Type: application/json\r\n\r\n{}\r\n", manifest).as_bytes());
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"activate\"\r\n\r\n{}\r\n",
+            activate
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"artifact\"; filename=\"bot.zip\"\r\nContent-Type: application/zip\r\n\r\n").as_bytes());
+    body.extend_from_slice(artifact);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/submissions")
+        .header("x-api-key", key)
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
 fn multipart(key: &str, artifact: &[u8], manifest: &Value) -> Request<Body> {
     let boundary = "----pokerbotsboundary42";
     let mut body: Vec<u8> = Vec::new();
@@ -242,6 +273,18 @@ async fn full_competition_flow() {
     assert_eq!(st, StatusCode::CREATED, "{v}");
     assert_eq!(v["status"], "validated");
     assert_eq!(v["smoke_test"]["passed"], true);
+    let checks = v["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 3, "{v}");
+    assert_eq!(checks[0]["stage"], "build");
+    assert_eq!(checks[0]["status"], "passed");
+    assert_eq!(checks[1]["stage"], "smoke");
+    assert_eq!(checks[1]["status"], "passed");
+    assert_eq!(checks[2]["stage"], "trial");
+    assert!(
+        checks[2]["status"] == "passed" || checks[2]["status"] == "warned",
+        "{v}"
+    );
+    assert!(checks[2]["details"]["decisions"].as_u64().unwrap() > 0);
     let sub_a1 = v["submission_id"].as_str().unwrap().to_string();
     assert!(sub_a1.starts_with(&format!("sub_{team_a}_")), "{sub_a1}");
     let (st, v) = upload(app, &key_b, "call_bot.py").await;
@@ -275,10 +318,47 @@ async fn full_competition_flow() {
     assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
     assert_eq!(v["error"]["code"], "validation_error");
     assert_eq!(v["error"]["details"]["reason"], "timeout");
+    assert_eq!(v["error"]["details"]["stage"], "smoke", "{v}");
     let rejected_id = v["error"]["details"]["submission_id"]
         .as_str()
         .unwrap()
         .to_string();
+
+    // ---- a bot that does not compile is rejected at the build stage
+    let syntax_err = zip_of(&[("bot.py", b"def act(:\n".to_vec())]);
+    let (st, v) = call(
+        app,
+        multipart(
+            &key_a,
+            &syntax_err,
+            &json!({"entrypoint": "bot.py", "runtime": "python3"}),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert_eq!(v["error"]["details"]["stage"], "build", "{v}");
+    let summary = v["error"]["details"]["stage_summary"].as_str().unwrap();
+    assert!(
+        summary.contains("py_compile") || summary.contains("exited"),
+        "{summary}"
+    );
+
+    // ---- auto-activate on upload: multipart `activate=true` goes live once validated
+    let (st, v) = call(
+        app,
+        multipart_with_activate(
+            &key_a,
+            &python_bot_zip("call_bot.py"),
+            &json!({"entrypoint": "call_bot.py", "runtime": "python3"}),
+            true,
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    assert_eq!(v["active"], true, "{v}");
+    let auto_id = v["submission_id"].as_str().unwrap().to_string();
+    let (_, me) = call(app, json_req("GET", "/api/v1/me", Some(&key_a), None, None)).await;
+    assert_eq!(me["active_submission_id"], json!(auto_id));
     // missing entrypoint => setup_failed
     let (st, v) = call(
         app,
@@ -306,7 +386,7 @@ async fn full_competition_flow() {
     )
     .await;
     assert_eq!(st, StatusCode::OK);
-    assert_eq!(v["submissions"].as_array().unwrap().len(), 3);
+    assert_eq!(v["submissions"].as_array().unwrap().len(), 5);
     let (st, v) = call(
         app,
         json_req(
@@ -360,7 +440,6 @@ async fn full_competition_flow() {
         .await;
         assert_eq!(st, StatusCode::OK, "{v}");
         assert_eq!(v["active_submission_id"], json!(sub));
-        assert_eq!(v["previous_submission_id"], Value::Null);
     }
     let (st, v) = call(
         app,
@@ -829,6 +908,54 @@ async fn full_competition_flow() {
     )
     .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
+
+    // ---- web UI served at /
+    let resp = app
+        .clone()
+        .oneshot(json_req("GET", "/", None, None, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(ct.starts_with("text/html"));
+    let html = String::from_utf8(
+        resp.into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("Pokerbots") && html.contains("/api/v1"));
+
+    // ---- autoscale plan endpoint (admin)
+    let (st, _) = call(
+        app,
+        json_req("GET", "/api/v1/admin/autoscale", None, None, None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, v) = call(
+        app,
+        json_req(
+            "GET",
+            "/api/v1/admin/autoscale",
+            None,
+            Some(&env.admin_key),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["plan"]["desired_workers"].as_u64().unwrap() >= 1);
+    assert!(v["settings"]["max_workers"].as_u64().is_some());
 
     // ---- openapi served
     let resp = app

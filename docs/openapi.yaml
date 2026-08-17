@@ -61,8 +61,24 @@ components:
         entrypoint: { type: string, description: "Path inside the artifact, e.g. bot.py or ./bot" }
         runtime: { type: string, default: auto, enum: [auto, native, python3, node, java] }
         args: { type: array, items: { type: string }, default: [] }
+        build:
+          type: array
+          items: { type: string }
+          default: []
+          description: "Build command run in the sandbox before validation (argv). Empty = default per-runtime check (py_compile / node --check)."
+        build_timeout_secs: { type: integer, nullable: true }
         notes: { type: string, nullable: true }
         protocol_version: { type: string, default: "1" }
+    CheckReport:
+      type: object
+      description: Result of one validation stage.
+      properties:
+        stage: { type: string, enum: [build, smoke, trial] }
+        status: { type: string, enum: [pending, running, passed, warned, failed, skipped] }
+        started_at: { type: string, nullable: true }
+        finished_at: { type: string, nullable: true }
+        summary: { type: string }
+        details: { type: object, additionalProperties: true }
     SmokeReport:
       type: object
       properties:
@@ -85,7 +101,8 @@ components:
         submission_id: { type: string, example: sub_tm_ab12cd34ef56_0007 }
         team_id: { type: string }
         seq: { type: integer }
-        status: { type: string, enum: [pending, validated, rejected, deleted] }
+        status: { type: string, enum: [pending, building, smoke_testing, trial_running, validated, rejected, deleted] }
+        in_progress: { type: boolean, description: still moving through the validation pipeline }
         protocol_version: { type: string }
         manifest: { $ref: '#/components/schemas/Manifest' }
         artifact_sha256: { type: string }
@@ -93,6 +110,8 @@ components:
         created_at: { type: string, format: date-time }
         validated_at: { type: string, format: date-time, nullable: true }
         smoke_test: { $ref: '#/components/schemas/SmokeReport', nullable: true }
+        checks: { type: array, items: { $ref: '#/components/schemas/CheckReport' } }
+        auto_activate: { type: boolean }
         active: { type: boolean }
     TournamentConfig:
       type: object
@@ -213,6 +232,27 @@ components:
         nightly_enabled: { type: boolean }
         nightly_time_utc: { type: string, example: "07:00" }
         nightly_series_length: { type: integer }
+        validation:
+          type: object
+          properties:
+            build_enabled: { type: boolean }
+            build_timeout_secs: { type: integer }
+            trial_enabled: { type: boolean }
+            trial_hands: { type: integer }
+            trial_max_substitution_rate: { type: number }
+            allow_auto_activate: { type: boolean }
+        autoscale:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            min_workers: { type: integer }
+            max_workers: { type: integer }
+            worker_concurrency: { type: integer }
+            max_bots_per_worker: { type: integer }
+            nightly_deadline_hours: { type: number }
+            ondemand_deadline_minutes: { type: number }
+            est_secs_per_participant: { type: number }
+            scale_down_cooldown_secs: { type: integer }
         ondemand_runs_per_team_per_day: { type: integer }
         ondemand_max_series_length: { type: integer }
         smoke_timeout_ms: { type: integer }
@@ -340,12 +380,14 @@ paths:
   /submissions:
     post:
       tags: [submissions]
-      summary: Upload a bot artifact (multipart) and run the protocol smoke test
+      summary: Upload a bot artifact (multipart) and run the validation pipeline (build → smoke → trial)
       description: |
         `artifact`: a zip archive or a single file (max `max_upload_bytes`, default 50 MB).
         `manifest`: JSON string (see Manifest). Zips whose only top-level entry is a folder are
-        hoisted automatically. On success the submission is `validated` but **not active** until
-        `POST /submissions/{id}/activate`.
+        hoisted automatically. Validation runs three stages — build/compile check, protocol smoke
+        test, and a short trial match against reference bots — recorded in `checks`. On success
+        the submission is `validated`; it becomes active only via
+        `POST /submissions/{id}/activate` or when `activate=true` was sent with the upload.
       requestBody:
         required: true
         content:
@@ -356,18 +398,19 @@ paths:
               properties:
                 artifact: { type: string, format: binary }
                 manifest: { type: string, description: JSON-encoded Manifest }
+                activate: { type: string, enum: ["true", "false"], description: activate automatically once validated }
       responses:
         "201":
           description: Validated
           content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } }
         "202":
-          description: Accepted but the smoke test has not finished yet (no worker available); poll GET /submissions/{id}
+          description: Accepted but validation has not finished yet; poll GET /submissions/{id}
           content: { application/json: { schema: { $ref: '#/components/schemas/Submission' } } }
         "413":
           description: Artifact too large
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
         "422":
-          description: Smoke test failed or manifest invalid. `details` carries `submission_id`, `reason` (timeout | invalid_json | illegal_action | crashed | setup_failed), `message`, `stderr_tail`.
+          description: Validation failed or manifest invalid. `details` carries `submission_id`, `stage` (build | smoke | trial), `stage_summary`, `checks`, `reason` (timeout | invalid_json | illegal_action | crashed | setup_failed), `message`, `stderr_tail`.
           content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
     get:
       tags: [submissions]
@@ -620,6 +663,29 @@ paths:
       responses:
         "202": { description: Queued }
         "404": { $ref: '#/components/responses/NotFound' }
+  /admin/autoscale:
+    get:
+      tags: [admin]
+      security: [{ AdminKey: [] }, { ApiKey: [] }]
+      summary: Current autoscaling plan (per-run demand, desired workers) and the last action taken
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { type: object, description: autoscale settings (editable via PATCH /admin/config) }
+                  plan:
+                    type: object
+                    properties:
+                      desired_workers: { type: integer }
+                      slots_needed: { type: integer }
+                      concurrent_bots_needed: { type: integer }
+                      reason: { type: string }
+                      runs: { type: array, items: { type: object } }
+                  last_action: { type: object, nullable: true }
   /admin/metrics:
     get:
       tags: [admin]

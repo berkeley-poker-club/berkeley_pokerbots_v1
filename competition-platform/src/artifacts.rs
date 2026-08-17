@@ -232,6 +232,8 @@ mod tests {
             entrypoint: ep.into(),
             runtime: "python3".into(),
             args: vec![],
+            build: vec![],
+            build_timeout_secs: None,
             notes: None,
             protocol_version: "1".into(),
         }

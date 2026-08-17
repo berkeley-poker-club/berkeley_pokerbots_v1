@@ -30,12 +30,74 @@ pub struct BotLaunch {
     pub stderr_log: Option<PathBuf>,
 }
 
+/// Result of a one-shot build/command run inside the sandbox.
+#[derive(Clone, Debug)]
+pub struct CommandOutput {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub stdout_tail: String,
+    pub stderr_tail: String,
+}
+
+impl CommandOutput {
+    pub fn ok(&self) -> bool {
+        !self.timed_out && self.exit_code == Some(0)
+    }
+}
+
 #[async_trait]
 pub trait Sandbox: Send + Sync {
     async fn spawn(&self, launch: &BotLaunch) -> Result<ProcessBot>;
+    /// Run a one-shot command (e.g. a build) inside the same isolation as a bot, in the artifact
+    /// directory, with the given timeout. `runtime` selects the environment (docker image);
+    /// `writable` allows the command to write build outputs into the artifact directory.
+    async fn run_command(
+        &self,
+        artifact_dir: &std::path::Path,
+        argv: &[String],
+        runtime: &str,
+        timeout: std::time::Duration,
+        writable: bool,
+    ) -> Result<CommandOutput>;
     /// Best-effort cleanup of anything left over from `session` (e.g. stray containers).
     async fn cleanup_session(&self, _session: &str) {}
     fn describe(&self) -> String;
+}
+
+async fn capture_command(mut cmd: Command, timeout: std::time::Duration) -> Result<CommandOutput> {
+    use tokio::io::AsyncReadExt;
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let mut out = child.stdout.take();
+    let mut err = child.stderr.take();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let read = async {
+        if let Some(o) = out.as_mut() {
+            let _ = o.read_to_end(&mut stdout).await;
+        }
+        if let Some(e) = err.as_mut() {
+            let _ = e.read_to_end(&mut stderr).await;
+        }
+    };
+    let status = tokio::select! {
+        s = child.wait() => { read.await; Some(s?) }
+        _ = tokio::time::sleep(timeout) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            None
+        }
+    };
+    let tail =
+        |b: &[u8]| String::from_utf8_lossy(&b[b.len().saturating_sub(8 * 1024)..]).into_owned();
+    Ok(CommandOutput {
+        exit_code: status.as_ref().and_then(|s| s.code()),
+        timed_out: status.is_none(),
+        stdout_tail: tail(&stdout),
+        stderr_tail: tail(&stderr),
+    })
 }
 
 pub fn build_sandbox(cfg: &SandboxConfig) -> Result<Arc<dyn Sandbox>> {
@@ -169,12 +231,47 @@ impl Sandbox for ProcessSandbox {
             .with_context(|| format!("spawning {} {:?}", program, args))
     }
 
+    async fn run_command(
+        &self,
+        artifact_dir: &std::path::Path,
+        argv: &[String],
+        _runtime: &str,
+        timeout: std::time::Duration,
+        _writable: bool,
+    ) -> Result<CommandOutput> {
+        let (program, args) = split_argv(argv)?;
+        // Map generic interpreter names to the configured local ones.
+        let program = match program.as_str() {
+            "python3" => self.cfg.python.clone(),
+            "node" => self.cfg.node.clone(),
+            "java" => self.cfg.java.clone(),
+            other => other.to_string(),
+        };
+        let mut cmd = Command::new(&program);
+        cmd.args(&args)
+            .current_dir(artifact_dir)
+            .env(
+                "PATH",
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()),
+            )
+            .env("HOME", std::env::temp_dir());
+        capture_command(cmd, timeout).await
+    }
+
     fn describe(&self) -> String {
         format!(
             "process sandbox (rlimits: cpu={:?}s nofile={} mem={}MB)",
             self.cfg.cpu_seconds, self.cfg.max_open_files, self.cfg.memory_mb
         )
     }
+}
+
+fn split_argv(argv: &[String]) -> Result<(String, Vec<String>)> {
+    let program = argv
+        .first()
+        .ok_or_else(|| anyhow!("empty command"))?
+        .clone();
+    Ok((program, argv[1..].to_vec()))
 }
 
 // ---------------------------------------------------------------- docker sandbox
@@ -265,6 +362,48 @@ impl Sandbox for DockerSandbox {
         ProcessBot::spawn_command(cmd, spawn_options(launch))
             .await
             .with_context(|| format!("docker run {} for {}", name, launch.display_name))
+    }
+
+    async fn run_command(
+        &self,
+        artifact_dir: &std::path::Path,
+        argv: &[String],
+        runtime: &str,
+        timeout: std::time::Duration,
+        writable: bool,
+    ) -> Result<CommandOutput> {
+        let (program, args) = split_argv(argv)?;
+        let mem = format!("{}m", self.cfg.memory_mb.max(512));
+        let mount = if writable {
+            format!("{}:/bot:rw", artifact_dir.display())
+        } else {
+            format!("{}:/bot:ro", artifact_dir.display())
+        };
+        let mut cmd = Command::new(&self.cfg.docker.binary);
+        cmd.arg("run")
+            .arg("--rm")
+            .arg("--network")
+            .arg("none")
+            .arg("--memory")
+            .arg(&mem)
+            .arg("--cpus")
+            .arg(format!("{}", self.cfg.docker.cpus.max(1.0)))
+            .arg("--pids-limit")
+            .arg((self.cfg.max_pids * 4).to_string())
+            .arg("--cap-drop")
+            .arg("ALL")
+            .arg("--security-opt")
+            .arg("no-new-privileges")
+            .arg("-v")
+            .arg(&mount)
+            .arg("-w")
+            .arg("/bot")
+            .arg("-e")
+            .arg("HOME=/tmp")
+            .arg(self.image_for(runtime))
+            .arg(&program)
+            .args(&args);
+        capture_command(cmd, timeout).await
     }
 
     async fn cleanup_session(&self, session: &str) {

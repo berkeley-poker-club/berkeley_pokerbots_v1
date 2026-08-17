@@ -24,6 +24,9 @@ pub fn submission_json(s: &Submission, active_id: Option<&str>) -> Value {
         "created_at": s.created_at,
         "validated_at": s.validated_at,
         "smoke_test": s.smoke_test,
+        "checks": s.checks,
+        "auto_activate": s.auto_activate,
+        "in_progress": s.status.in_progress(),
         "active": active_id == Some(s.id.as_str()),
     })
 }
@@ -40,6 +43,7 @@ pub async fn upload(
     let settings = state.store.settings()?;
     let mut artifact: Option<Vec<u8>> = None;
     let mut manifest: Option<Manifest> = None;
+    let mut auto_activate = false;
     while let Some(field) = multipart
         .next_field()
         .await
@@ -58,6 +62,10 @@ pub async fn upload(
                     )));
                 }
                 artifact = Some(bytes.to_vec());
+            }
+            "activate" => {
+                let text = field.text().await.unwrap_or_default();
+                auto_activate = matches!(text.trim(), "1" | "true" | "on" | "yes");
             }
             "manifest" => {
                 let text = field
@@ -99,6 +107,7 @@ pub async fn upload(
         &crate::ids::sha256_hex(&artifact),
         artifact.len() as u64,
         &manifest,
+        auto_activate && settings.validation.allow_auto_activate,
     )?;
     let saved = artifacts
         .save(&sub.id, &artifact)
@@ -110,14 +119,14 @@ pub async fn upload(
         &json!({ "submission_id": sub.id }),
         None,
         10,
-        1,
+        2,
     )?;
 
-    // Wait (bounded) for a worker to run the smoke test so the student gets an immediate verdict.
+    // Wait (bounded) for the validation pipeline so the uploader gets an immediate verdict.
     let deadline =
         tokio::time::Instant::now() + Duration::from_millis(state.cfg.server.smoke_wait_ms);
     let mut current = sub.clone();
-    while current.status == SubmissionStatus::Pending && tokio::time::Instant::now() < deadline {
+    while current.status.in_progress() && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(200)).await;
         if let Some(s) = state.store.submission(&sub.id)? {
             current = s;
@@ -131,9 +140,16 @@ pub async fn upload(
         )),
         SubmissionStatus::Rejected => {
             let report = current.smoke_test.clone();
+            let failed = current
+                .checks
+                .iter()
+                .find(|c| c.status == crate::models::CheckStatus::Failed);
             Err(
-                ApiError::validation("bot failed protocol smoke test").with_details(json!({
+                ApiError::validation("bot failed validation").with_details(json!({
                     "submission_id": current.id,
+                    "stage": failed.map(|c| c.stage),
+                    "stage_summary": failed.map(|c| c.summary.clone()),
+                    "checks": current.checks,
                     "reason": report.as_ref().and_then(|r| r.reason.clone()),
                     "message": report.as_ref().map(|r| r.message.clone()),
                     "stderr_tail": report.as_ref().map(|r| r.stderr_tail.clone()),
@@ -143,7 +159,7 @@ pub async fn upload(
         }
         _ => {
             let mut v = submission_json(&current, active.as_deref());
-            v["hint"] = json!("smoke test still running; poll GET /submissions/{submission_id}");
+            v["hint"] = json!("validation still running; poll GET /submissions/{submission_id}");
             Ok((StatusCode::ACCEPTED, Json(v)))
         }
     }

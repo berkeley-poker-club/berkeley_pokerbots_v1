@@ -35,6 +35,9 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     init_tracing("info,tower_http=info");
+    if let Some(n) = table_runner::raise_fd_limit() {
+        tracing::debug!(open_files = n, "raised fd limit");
+    }
     let mut cfg = PlatformConfig::load(Some(&cli.config))?;
     if let Some(b) = cli.bind {
         cfg.server.bind = b;
@@ -59,6 +62,14 @@ async fn main() -> Result<()> {
             cfg.scheduler.poll_secs,
             shutdown_rx.clone(),
         )));
+    }
+    if cfg.autoscaler.backend != "off" {
+        let autoscaler = competition_platform::autoscale::Autoscaler::new(
+            cfg.clone(),
+            cli.config.clone(),
+            Arc::clone(&services.store),
+        )?;
+        tasks.push(tokio::spawn(autoscaler.run(shutdown_rx.clone())));
     }
 
     let app = competition_platform::api::router(services.app_state());

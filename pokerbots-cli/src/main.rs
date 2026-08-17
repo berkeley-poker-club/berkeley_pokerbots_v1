@@ -169,6 +169,7 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    table_runner::raise_fd_limit();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_new(&cli.log).unwrap_or_default())
         .with_writer(std::io::stderr)

@@ -20,7 +20,7 @@ pub use local_bots::{
     RandomStrategy, Strategy,
 };
 pub use player::{Player, PlayerError, SharedPlayer};
-pub use process_bot::{ProcessBot, SpawnError, SpawnOptions};
+pub use process_bot::{raise_fd_limit, ProcessBot, SpawnError, SpawnOptions};
 pub use protocol::{BotMessage, EngineMessage, PROTOCOL_VERSION};
 pub use smoke::{smoke_test, SmokeFailure, SmokeReport};
 pub use table::{

@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pokerbots</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1a202c; --muted:#64748b; --line:#e2e8f0;
+          --accent:#1d4ed8; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --chip:#eef2ff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f172a; --card:#1e293b; --ink:#e2e8f0; --muted:#94a3b8; --line:#334155;
+            --accent:#60a5fa; --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --chip:#1e3a8a33; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line);
+           background:var(--card); position:sticky; top:0; z-index:5; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header .spacer { flex:1; }
+  main { max-width:1000px; margin:0 auto; padding:20px; display:grid; gap:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
+  .card h2 { margin:0 0 10px; font-size:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  input[type=text], input[type=password], select {
+    width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:6px;
+    background:var(--bg); color:var(--ink); font:inherit; }
+  input[type=file] { font:inherit; color:var(--muted); }
+  button { padding:8px 14px; border:0; border-radius:6px; background:var(--accent); color:#fff;
+           font:inherit; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .badge { display:inline-block; padding:1px 9px; border-radius:999px; font-size:12px; font-weight:600; background:var(--chip); }
+  .badge.ok { color:var(--ok); } .badge.bad { color:var(--bad); } .badge.warn { color:var(--warn); }
+  .badge.run { color:var(--accent); }
+  .muted { color:var(--muted); font-size:13px; }
+  .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:720px) { .grid2 { grid-template-columns:1fr; } }
+  #msg { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg);
+         padding:10px 18px; border-radius:8px; opacity:0; transition:opacity .25s; max-width:90vw; z-index:10; }
+  #msg.show { opacity:.95; }
+  details > summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:10px;
+        overflow:auto; max-height:260px; font-size:12px; white-space:pre-wrap; }
+  .stage { display:inline-flex; align-items:center; gap:4px; margin-right:8px; font-size:12.5px; }
+  .dot { width:8px; height:8px; border-radius:99px; background:var(--muted); display:inline-block; }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  .dot.warn { background:var(--warn); } .dot.run { background:var(--accent); animation:pulse 1s infinite alternate; }
+  @keyframes pulse { from { opacity:.4 } to { opacity:1 } }
+  .drop { border:2px dashed var(--line); border-radius:8px; padding:18px; text-align:center; color:var(--muted); }
+  .drop.hover { border-color:var(--accent); color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#9824;&#65039; Pokerbots</h1>
+  <span id="who" class="muted"></span>
+  <div class="spacer"></div>
+  <nav class="row">
+    <button class="secondary" data-tab="board">Leaderboard</button>
+    <button class="secondary" data-tab="mybots">My bots</button>
+    <button class="secondary" data-tab="runs">Runs</button>
+    <button class="secondary" id="logout" hidden>Sign out</button>
+  </nav>
+</header>
+<main>
+  <!-- ============ auth ============ -->
+  <section id="tab-auth" class="card" hidden>
+    <div class="grid2">
+      <div>
+        <h2>Use an existing API key</h2>
+        <label>Team API key</label>
+        <input id="key-input" type="password" placeholder="pb_live_...">
+        <p><button id="key-save">Sign in</button></p>
+      </div>
+      <div>
+        <h2>Register a new team</h2>
+        <label>Team name</label>
+        <input id="reg-name" type="text" placeholder="ace-high" maxlength="40">
+        <label>Your name</label>
+        <input id="reg-member" type="text" placeholder="Ada Lovelace">
+        <label>Email</label>
+        <input id="reg-email" type="text" placeholder="ada@berkeley.edu">
+        <p><button id="reg-go">Create team</button></p>
+        <p id="reg-out" class="mono" hidden></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ my bots ============ -->
+  <section id="tab-mybots" hidden>
+    <div class="card">
+      <h2>Upload a bot</h2>
+      <div class="drop" id="drop">Drop a <b>.zip</b> or a single bot file here, or
+        <input id="file" type="file" accept=".zip,.py,.js,.jar,application/zip">
+      </div>
+      <div class="grid2">
+        <div>
+          <label>Entrypoint (path inside the archive)</label>
+          <input id="entrypoint" type="text" placeholder="my_bot.py">
+        </div>
+        <div>
+          <label>Runtime</label>
+          <select id="runtime">
+            <option value="auto" selected>auto (by file extension)</option>
+            <option value="python3">python3</option>
+            <option value="node">node</option>
+            <option value="java">java (jar)</option>
+            <option value="native">native (linux x86-64 binary)</option>
+          </select>
+        </div>
+      </div>
+      <p class="row">
+        <label class="row" style="margin:0"><input id="auto-activate" type="checkbox" checked>
+          activate automatically once validated</label>
+        <span class="spacer"></span>
+        <button id="upload" disabled>Upload &amp; validate</button>
+      </p>
+      <div id="upload-status" hidden>
+        <span class="stage"><span class="dot" id="st-build"></span> build</span>
+        <span class="stage"><span class="dot" id="st-smoke"></span> protocol smoke test</span>
+        <span class="stage"><span class="dot" id="st-trial"></span> trial vs reference bots</span>
+        <span id="upload-verdict" class="badge"></span>
+        <details id="upload-details" hidden><summary>details</summary><pre id="upload-log"></pre></details>
+      </div>
+    </div>
+    <div class="card">
+      <h2>My submissions</h2>
+      <table><thead><tr><th>id</th><th>uploaded</th><th>status</th><th>checks</th><th></th></tr></thead>
+        <tbody id="subs"></tbody></table>
+      <p class="muted" id="subs-empty" hidden>No submissions yet — upload your first bot above.</p>
+    </div>
+    <div class="card">
+      <h2>My results</h2>
+      <div id="stats" class="muted">—</div>
+    </div>
+  </section>
+
+  <!-- ============ leaderboard ============ -->
+  <section id="tab-board" hidden>
+    <div class="card">
+      <h2 id="board-title">Leaderboard</h2>
+      <p class="muted" id="board-sub"></p>
+      <table><thead><tr><th>#</th><th>team</th><th>geo-mean placement</th><th>tournaments</th></tr></thead>
+        <tbody id="board"></tbody></table>
+      <p class="muted" id="board-empty" hidden>No completed run yet.</p>
+    </div>
+  </section>
+
+  <!-- ============ runs ============ -->
+  <section id="tab-runs" hidden>
+    <div class="card">
+      <h2>Runs</h2>
+      <p class="row">
+        <button id="run-single" class="secondary">Start a quick test run (1 tournament)</button>
+        <span class="muted">rate-limited per team</span>
+      </p>
+      <table><thead><tr><th>run</th><th>kind</th><th>status</th><th>bots</th><th>progress</th><th>created</th></tr></thead>
+        <tbody id="runs"></tbody></table>
+    </div>
+  </section>
+</main>
+<div id="msg"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const api = (path) => "/api/v1" + path;
+let KEY = localStorage.getItem("pb_api_key") || "";
+let ME = null;
+let pollTimer = null;
+
+function msg(text, ms = 3500) {
+  const el = $("msg"); el.textContent = text; el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), ms);
+}
+function esc(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
+function fmtTime(t) { return t ? new Date(t).toLocaleString() : "—"; }
+async function call(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers);
+  if (KEY) opts.headers["X-Api-Key"] = KEY;
+  const r = await fetch(api(path), opts);
+  let body = null;
+  try { body = await r.json(); } catch (e) {}
+  if (!r.ok) {
+    const e = new Error((body && body.error && body.error.message) || r.statusText);
+    e.status = r.status; e.body = body; throw e;
+  }
+  return body;
+}
+
+// ---------- tabs ----------
+function show(tab) {
+  for (const t of ["auth", "mybots", "board", "runs"]) $("tab-" + t).hidden = t !== tab;
+  if (tab === "board") loadBoard();
+  if (tab === "runs") loadRuns();
+  if (tab === "mybots") { loadSubs(); loadStats(); }
+}
+document.querySelectorAll("nav [data-tab]").forEach(b => b.onclick = () => {
+  const t = b.dataset.tab;
+  if ((t === "mybots" || t === "runs") && !ME) { show("auth"); msg("Sign in or register first"); return; }
+  show(t);
+});
+
+// ---------- auth ----------
+async function refreshMe() {
+  if (!KEY) { ME = null; render(); return; }
+  try { ME = await call("/me"); }
+  catch (e) { if (e.status === 401) { KEY = ""; localStorage.removeItem("pb_api_key"); ME = null; } }
+  render();
+}
+function render() {
+  $("who").textContent = ME ? `${ME.team_name} (${ME.team_id})` : "";
+  $("logout").hidden = !ME;
+  show(ME ? "mybots" : "board");
+}
+$("key-save").onclick = async () => {
+  KEY = $("key-input").value.trim();
+  localStorage.setItem("pb_api_key", KEY);
+  await refreshMe();
+  if (ME) msg(`Signed in as ${ME.team_name}`); else msg("Invalid API key");
+};
+$("logout").onclick = () => { KEY = ""; ME = null; localStorage.removeItem("pb_api_key"); render(); };
+$("reg-go").onclick = async () => {
+  const name = $("reg-name").value.trim();
+  if (!name) return msg("Enter a team name");
+  const members = [];
+  if ($("reg-member").value.trim())
+    members.push({ name: $("reg-member").value.trim(), email: $("reg-email").value.trim() || null });
+  try {
+    const r = await call("/auth/register", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ team_name: name, members }),
+    });
+    KEY = r.api_key; localStorage.setItem("pb_api_key", KEY);
+    $("reg-out").hidden = false;
+    $("reg-out").textContent = `Your API key (shown once, saved in this browser): ${r.api_key}`;
+    await refreshMe();
+    msg(`Team ${r.team_name} created`);
+  } catch (e) { msg(`Registration failed: ${e.message}`); }
+};
+
+// ---------- upload ----------
+let file = null;
+function setFile(f) {
+  file = f;
+  $("upload").disabled = !f;
+  $("drop").firstChild.textContent = f ? `Selected: ${f.name} (${(f.size/1024).toFixed(0)} KB) — ` : "Drop a .zip or a single bot file here, or ";
+  if (f && !$("entrypoint").value && !f.name.endsWith(".zip")) $("entrypoint").value = f.name;
+}
+$("file").onchange = (e) => setFile(e.target.files[0] || null);
+const drop = $("drop");
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("hover"); };
+drop.ondragleave = () => drop.classList.remove("hover");
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("hover"); setFile(e.dataTransfer.files[0] || null); };
+
+function paintStages(checks, status) {
+  const map = { build: "st-build", smoke: "st-smoke", trial: "st-trial" };
+  for (const d of Object.values(map)) $(d).className = "dot";
+  for (const c of checks || []) {
+    const el = $(map[c.stage]); if (!el) continue;
+    el.className = "dot " + ({ passed: "ok", warned: "warn", failed: "bad", running: "run", skipped: "", pending: "" }[c.status] || "");
+  }
+  if (status === "building") $("st-build").className = "dot run";
+  if (status === "smoke_testing") $("st-smoke").className = "dot run";
+  if (status === "trial_running") $("st-trial").className = "dot run";
+}
+$("upload").onclick = async () => {
+  if (!file) return;
+  const ep = $("entrypoint").value.trim() || (file.name.endsWith(".zip") ? "" : file.name);
+  if (!ep) return msg("Enter the entrypoint path inside your archive");
+  $("upload").disabled = true;
+  $("upload-status").hidden = false;
+  $("upload-verdict").textContent = "uploading…"; $("upload-verdict").className = "badge run";
+  $("upload-details").hidden = true;
+  paintStages([], "building");
+  const fd = new FormData();
+  fd.append("manifest", JSON.stringify({
+    language: "other", runtime: $("runtime").value, entrypoint: ep, protocol_version: "1",
+  }));
+  fd.append("activate", $("auto-activate").checked ? "true" : "false");
+  fd.append("artifact", file);
+  try {
+    const r = await fetch(api("/submissions"), { method: "POST", headers: { "X-Api-Key": KEY }, body: fd });
+    const body = await r.json();
+    if (r.status === 201) {
+      paintStages(body.checks, body.status);
+      $("upload-verdict").textContent = "validated" + (body.active ? " & active" : "");
+      $("upload-verdict").className = "badge ok";
+      msg("Bot validated" + (body.active ? " and activated" : ""));
+    } else if (r.status === 202) {
+      pollSubmission(body.submission_id);
+    } else {
+      const d = (body.error && body.error.details) || {};
+      paintStages(d.checks, "rejected");
+      $("upload-verdict").textContent = `rejected at ${d.stage || "validation"}`;
+      $("upload-verdict").className = "badge bad";
+      $("upload-details").hidden = false;
+      $("upload-log").textContent =
+        (d.stage_summary || d.message || "") + (d.stderr_tail ? "\n\n--- your bot's stderr ---\n" + d.stderr_tail : "");
+    }
+  } catch (e) { msg(`Upload failed: ${e.message}`); }
+  $("upload").disabled = false;
+  loadSubs();
+};
+function pollSubmission(id) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const s = await call(`/submissions/${id}`);
+      paintStages(s.checks, s.status);
+      if (!s.in_progress) {
+        clearInterval(pollTimer);
+        const ok = s.status === "validated";
+        $("upload-verdict").textContent = s.status;
+        $("upload-verdict").className = "badge " + (ok ? "ok" : "bad");
+        if (!ok && s.smoke_test) {
+          $("upload-details").hidden = false;
+          $("upload-log").textContent = s.smoke_test.message + (s.smoke_test.stderr_tail ? "\n\n" + s.smoke_test.stderr_tail : "");
+        }
+        loadSubs();
+      }
+    } catch (e) { clearInterval(pollTimer); }
+  }, 1500);
+}
+
+// ---------- submissions list ----------
+function checkBadges(sub) {
+  return (sub.checks || []).map(c =>
+    `<span class="stage" title="${esc(c.summary)}"><span class="dot ${
+      { passed: "ok", warned: "warn", failed: "bad", running: "run" }[c.status] || ""
+    }"></span>${c.stage}</span>`).join("");
+}
+async function loadSubs() {
+  if (!ME) return;
+  try {
+    const r = await call("/submissions");
+    const rows = r.submissions.map(s => {
+      const active = s.active ? ` <span class="badge ok">active</span>` : "";
+      const cls = { validated: "ok", rejected: "bad", deleted: "" }[s.status] || "run";
+      const canActivate = s.status === "validated" && !s.active;
+      return `<tr>
+        <td class="mono">${esc(s.submission_id)}${active}</td>
+        <td class="muted">${fmtTime(s.created_at)}</td>
+        <td><span class="badge ${cls}">${esc(s.status)}</span></td>
+        <td>${checkBadges(s)}</td>
+        <td>${canActivate ? `<button class="secondary" onclick="activate('${esc(s.submission_id)}')">Activate</button>` : ""}</td>
+      </tr>`;
+    });
+    $("subs").innerHTML = rows.join("");
+    $("subs-empty").hidden = rows.length > 0;
+    if (r.submissions.some(s => s.in_progress)) setTimeout(loadSubs, 2000);
+  } catch (e) {}
+}
+window.activate = async (id) => {
+  try { await call(`/submissions/${id}/activate`, { method: "POST" }); msg("Activated"); loadSubs(); }
+  catch (e) { msg(`Activate failed: ${e.message}`); }
+};
+async function loadStats() {
+  if (!ME) return;
+  try {
+    const s = await call(`/teams/${ME.team_id}/stats`);
+    const sum = s.summary;
+    $("stats").innerHTML = sum.tournaments_played
+      ? `Played <b>${sum.tournaments_played}</b> tournaments · best place <b>${sum.best_place}</b> · ` +
+        `average <b>${(sum.average_place ?? 0).toFixed(1)}</b> · wins <b>${sum.wins}</b>`
+      : "No tournament results yet — your active bot joins the next run.";
+  } catch (e) {}
+}
+
+// ---------- leaderboard ----------
+async function loadBoard() {
+  try {
+    const b = await call("/leaderboard");
+    if (!b.run_id) { $("board-empty").hidden = false; $("board").innerHTML = ""; $("board-sub").textContent = ""; return; }
+    $("board-empty").hidden = true;
+    $("board-sub").textContent = `Run ${b.run_id} · ${b.series_length} tournaments · ${b.participant_count} bots · updated ${fmtTime(b.updated_at)}`;
+    $("board").innerHTML = b.entries.map(e =>
+      `<tr><td>${e.rank}</td><td>${esc(e.team_name || e.team_id)}</td>
+       <td>${e.geo_mean_placement}</td><td class="muted">${e.tournaments_counted}</td></tr>`).join("");
+  } catch (e) {}
+}
+
+// ---------- runs ----------
+async function loadRuns() {
+  try {
+    const r = await call("/runs?limit=25");
+    $("runs").innerHTML = r.runs.map(x => {
+      const cls = { completed: "ok", failed: "bad", cancelled: "warn" }[x.status] || "run";
+      const p = x.progress;
+      return `<tr><td class="mono">${esc(x.run_id)}</td><td>${x.kind}</td>
+        <td><span class="badge ${cls}">${x.status}</span></td>
+        <td>${x.participant_count}</td>
+        <td class="muted">${p.tournaments_completed}/${p.tournaments_total}</td>
+        <td class="muted">${fmtTime(x.created_at)}</td></tr>`;
+    }).join("");
+    if (r.runs.some(x => ["queued", "running", "finalizing"].includes(x.status))) setTimeout(loadRuns, 3000);
+  } catch (e) {}
+}
+$("run-single").onclick = async () => {
+  try {
+    const r = await call("/runs", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "single" }) });
+    msg(`Run ${r.run_id} queued`); loadRuns();
+  } catch (e) { msg(`Could not start run: ${e.message}`); }
+};
+
+refreshMe();
+</script>
+</body>
+</html>

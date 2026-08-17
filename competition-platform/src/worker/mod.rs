@@ -21,6 +21,7 @@ pub struct Worker {
     pub artifacts: Arc<ArtifactStore>,
     pub sandbox: Arc<dyn Sandbox>,
     running: AtomicU32,
+    bots_in_flight: AtomicU32,
     started_at: String,
 }
 
@@ -38,6 +39,7 @@ impl Worker {
             artifacts,
             sandbox,
             running: AtomicU32::new(0),
+            bots_in_flight: AtomicU32::new(0),
             started_at: now_str(),
         }
     }
@@ -62,6 +64,8 @@ impl Worker {
                 "sandbox": self.sandbox.describe(),
                 "job_types": self.job_types(),
                 "pid": std::process::id(),
+                "bots_in_flight": self.bots_in_flight.load(Ordering::SeqCst),
+                "max_bots_in_flight": self.cfg.worker.max_bots_in_flight,
             }),
         };
         if let Err(e) = self.store.upsert_worker(&row) {
@@ -110,7 +114,17 @@ impl Worker {
                     continue;
                 }
             };
-            let job = match self.store.claim_job(&self.id, &type_refs) {
+            let used = self.bots_in_flight.load(Ordering::SeqCst);
+            let capacity = self
+                .cfg
+                .worker
+                .max_bots_in_flight
+                .saturating_sub(used)
+                .max(1);
+            let job = match self
+                .store
+                .claim_job_with_capacity(&self.id, &type_refs, capacity)
+            {
                 Ok(Some(j)) => j,
                 Ok(None) => {
                     drop(permit);
@@ -129,9 +143,12 @@ impl Worker {
             };
             let me = Arc::clone(&self);
             me.running.fetch_add(1, Ordering::SeqCst);
+            let weight = job.weight;
+            me.bots_in_flight.fetch_add(weight, Ordering::SeqCst);
             tokio::spawn(async move {
                 me.execute(job).await;
                 me.running.fetch_sub(1, Ordering::SeqCst);
+                me.bots_in_flight.fetch_sub(weight, Ordering::SeqCst);
                 drop(permit);
             });
         }

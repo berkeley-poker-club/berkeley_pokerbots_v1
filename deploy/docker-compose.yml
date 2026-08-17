@@ -32,8 +32,11 @@ services:
       - /srv/pokerbots/data:/srv/pokerbots/data
       - ./pokerbots.toml:/srv/pokerbots/pokerbots.toml:ro
       - /var/run/docker.sock:/var/run/docker.sock
+    # Replica count is managed by the autoscaler (`[autoscaler] backend = "command"` in
+    # pokerbots.toml runs `docker compose ... --scale worker={n}`). The value below is only the
+    # starting point.
     deploy:
-      replicas: 2
+      replicas: 1
     depends_on:
       - api
     restart: unless-stopped

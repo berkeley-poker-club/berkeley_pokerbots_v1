@@ -57,6 +57,9 @@ pub struct TournamentOutcome {
     pub duration_ms: u64,
     /// Present when the tournament was cut short (`"cancelled"`, `"max_hands"`, ...).
     pub aborted: Option<String>,
+    /// Final chip counts (busted players hold 0). Always sums to `num_players * starting_stack`.
+    #[serde(default)]
+    pub final_stacks: HashMap<PlayerId, i64>,
 }
 
 struct TableInfo {
@@ -117,6 +120,7 @@ impl TournamentDirector {
             levels_reached: 0,
             duration_ms: 0,
             aborted: None,
+            final_stacks: HashMap::new(),
         };
         let by_id: HashMap<PlayerId, Arc<dyn Player>> = players
             .iter()
@@ -146,6 +150,10 @@ impl TournamentDirector {
                 .await;
                 p.shutdown().await;
             }
+            outcome.final_stacks = players
+                .iter()
+                .map(|p| (p.player_id(), cfg.starting_stack))
+                .collect();
             outcome.duration_ms = started.elapsed().as_millis() as u64;
             return outcome;
         }
@@ -484,6 +492,7 @@ impl TournamentDirector {
         )
         .await;
 
+        outcome.final_stacks = stacks;
         outcome.duration_ms = started.elapsed().as_millis() as u64;
         outcome
     }

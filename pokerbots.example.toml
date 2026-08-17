@@ -14,6 +14,8 @@ logs_dir = "data/logs"
 
 [worker]
 concurrency = 2
+# Refuse tournament jobs that would push this worker past this many live bots.
+max_bots_in_flight = 600
 poll_interval_ms = 1000
 heartbeat_secs = 20
 stale_job_secs = 300
@@ -40,6 +42,15 @@ native = "debian:bookworm-slim"
 enabled = true
 poll_secs = 30
 
+[autoscaler]
+# off | processes | command
+#   processes: the API spawns/stops local tournament-worker processes (single-box autoscaling)
+#   command:   run `scale_command` with {n} (docker compose, k8s, cloud ASG script, ...)
+backend = "off"
+poll_secs = 20
+# worker_binary = "/usr/local/bin/tournament-worker"
+# scale_command = "docker compose -f deploy/docker-compose.yml up -d --no-recreate --scale worker={n}"
+
 [defaults]
 nightly_enabled = true
 nightly_time_utc = "07:00"
@@ -50,6 +61,25 @@ smoke_timeout_ms = 10000
 max_upload_bytes = 52428800
 registration_open = true
 record_hands = false
+
+[defaults.validation]
+build_enabled = true          # compile / syntax check (manifest `build` or a per-runtime default)
+build_timeout_secs = 300
+trial_enabled = true          # short match vs reference bots before accepting
+trial_hands = 30
+trial_max_substitution_rate = 0.2
+allow_auto_activate = true
+
+[defaults.autoscale]
+enabled = true
+min_workers = 1
+max_workers = 8
+worker_concurrency = 2        # keep in sync with [worker].concurrency
+max_bots_per_worker = 600     # keep in sync with [worker].max_bots_in_flight
+nightly_deadline_hours = 6.0
+ondemand_deadline_minutes = 30.0
+est_secs_per_participant = 1.5
+scale_down_cooldown_secs = 600
 
 [defaults.tournament]
 table_size = 9

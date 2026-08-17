@@ -28,6 +28,7 @@ pub struct AppState {
 pub type SharedState = Arc<AppState>;
 
 pub const OPENAPI_YAML: &str = include_str!("../../../docs/openapi.yaml");
+pub const UI_HTML: &str = include_str!("../../ui/index.html");
 
 /// Build the full router (mounted at `/api/v1` plus root health endpoints).
 pub fn router(state: SharedState) -> Router {
@@ -75,6 +76,7 @@ pub fn router(state: SharedState) -> Router {
         )
         .route("/admin/teams/{team_id}/suspend", post(admin::suspend_team))
         .route("/admin/workers", get(admin::workers))
+        .route("/admin/autoscale", get(admin::autoscale))
         .route("/admin/revalidate/{submission_id}", post(admin::revalidate))
         .route("/admin/metrics", get(admin::metrics))
         .route("/admin/runs/nightly", post(admin::nightly))
@@ -86,7 +88,9 @@ pub fn router(state: SharedState) -> Router {
         .layer(DefaultBodyLimit::max(max_upload));
 
     Router::new()
-        .route("/", get(index))
+        .route("/", get(ui))
+        .route("/ui", get(ui))
+        .route("/about", get(index))
         .route("/health", get(health))
         .route("/ready", get(ready))
         .nest("/api/v1", v1)
@@ -98,6 +102,13 @@ pub fn router(state: SharedState) -> Router {
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn ui() -> ([(http::HeaderName, &'static str); 1], &'static str) {
+    (
+        [(http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        UI_HTML,
+    )
 }
 
 async fn index() -> Json<serde_json::Value> {

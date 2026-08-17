@@ -28,6 +28,9 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing("info");
+    if let Some(n) = table_runner::raise_fd_limit() {
+        tracing::debug!(open_files = n, "raised fd limit");
+    }
     let mut cfg = PlatformConfig::load(Some(&cli.config))?;
     if let Some(c) = cli.concurrency {
         cfg.worker.concurrency = c;

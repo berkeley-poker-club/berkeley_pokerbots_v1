@@ -39,6 +39,13 @@ pub struct Manifest {
     /// Extra command-line arguments passed to the entrypoint.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Optional build command run once inside the sandbox before validation (e.g.
+    /// `["cargo","build","--release","--offline"]`, `["make"]`). Interpreted languages get a
+    /// default syntax check when this is empty.
+    #[serde(default)]
+    pub build: Vec<String>,
+    #[serde(default)]
+    pub build_timeout_secs: Option<u64>,
     #[serde(default)]
     pub notes: Option<String>,
     #[serde(default = "default_protocol")]
@@ -79,6 +86,14 @@ impl Manifest {
                 self.protocol_version
             ));
         }
+        if self.build.len() > 64 || self.build.iter().any(|a| a.len() > 512) {
+            return Err("build command is too long".into());
+        }
+        if let Some(t) = self.build_timeout_secs {
+            if t == 0 || t > 3600 {
+                return Err("build_timeout_secs must be in 1..=3600".into());
+            }
+        }
         Ok(())
     }
 
@@ -100,10 +115,15 @@ impl Manifest {
     }
 }
 
+/// Lifecycle of a submission through the validation pipeline:
+/// `pending → building → smoke_testing → trial_running → validated | rejected`.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubmissionStatus {
     Pending,
+    Building,
+    SmokeTesting,
+    TrialRunning,
     Validated,
     Rejected,
     Deleted,
@@ -113,6 +133,9 @@ impl SubmissionStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             SubmissionStatus::Pending => "pending",
+            SubmissionStatus::Building => "building",
+            SubmissionStatus::SmokeTesting => "smoke_testing",
+            SubmissionStatus::TrialRunning => "trial_running",
             SubmissionStatus::Validated => "validated",
             SubmissionStatus::Rejected => "rejected",
             SubmissionStatus::Deleted => "deleted",
@@ -120,10 +143,71 @@ impl SubmissionStatus {
     }
     pub fn parse(s: &str) -> SubmissionStatus {
         match s {
+            "building" => SubmissionStatus::Building,
+            "smoke_testing" => SubmissionStatus::SmokeTesting,
+            "trial_running" => SubmissionStatus::TrialRunning,
             "validated" => SubmissionStatus::Validated,
             "rejected" => SubmissionStatus::Rejected,
             "deleted" => SubmissionStatus::Deleted,
             _ => SubmissionStatus::Pending,
+        }
+    }
+    /// Still moving through the pipeline.
+    pub fn in_progress(&self) -> bool {
+        matches!(
+            self,
+            SubmissionStatus::Pending
+                | SubmissionStatus::Building
+                | SubmissionStatus::SmokeTesting
+                | SubmissionStatus::TrialRunning
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStage {
+    /// Build / compile / syntax check.
+    Build,
+    /// Protocol smoke test.
+    Smoke,
+    /// Short trial run against reference bots (crashes, timeouts, latency).
+    Trial,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Pending,
+    Running,
+    Passed,
+    /// Passed with warnings (visible to the team and admins).
+    Warned,
+    Failed,
+    Skipped,
+}
+
+/// Result of one pipeline stage.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CheckReport {
+    pub stage: CheckStage,
+    pub status: CheckStatus,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub summary: String,
+    #[serde(default)]
+    pub details: serde_json::Value,
+}
+
+impl CheckReport {
+    pub fn pending(stage: CheckStage) -> Self {
+        CheckReport {
+            stage,
+            status: CheckStatus::Pending,
+            started_at: None,
+            finished_at: None,
+            summary: String::new(),
+            details: serde_json::Value::Null,
         }
     }
 }
@@ -140,6 +224,10 @@ pub struct Submission {
     pub status: SubmissionStatus,
     pub protocol_version: String,
     pub smoke_test: Option<SmokeReport>,
+    /// Per-stage validation reports (scan, build, smoke, trial).
+    pub checks: Vec<CheckReport>,
+    /// Activate automatically once validated.
+    pub auto_activate: bool,
     pub created_at: String,
     pub validated_at: Option<String>,
 }
@@ -339,6 +427,7 @@ impl JobStatus {
 }
 
 pub mod job_types {
+    /// Full validation pipeline for a submission (scan → build → smoke → trial).
     pub const SMOKE_VALIDATE: &str = "smoke_validate_submission";
     pub const RUN_SERIES: &str = "run_series";
     pub const RUN_TOURNAMENT: &str = "run_tournament";
@@ -359,6 +448,8 @@ pub struct Job {
     pub heartbeat_at: Option<String>,
     pub attempts: u32,
     pub max_attempts: u32,
+    /// Capacity units the job needs while running (bots for a tournament; 1 otherwise).
+    pub weight: u32,
     pub created_at: String,
     pub finished_at: Option<String>,
     pub error: Option<String>,
@@ -392,6 +483,77 @@ pub struct PlatformSettings {
     pub max_upload_bytes: u64,
     pub registration_open: bool,
     pub record_hands: bool,
+    /// Validation pipeline knobs.
+    pub validation: ValidationSettings,
+    /// Capacity planning / autoscaling knobs.
+    pub autoscale: AutoscaleSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ValidationSettings {
+    /// Run the build / compile / syntax-check stage.
+    pub build_enabled: bool,
+    pub build_timeout_secs: u64,
+    pub trial_enabled: bool,
+    /// Number of 3-handed hands played against reference bots in the trial run.
+    pub trial_hands: u32,
+    /// Maximum fraction of the bot's decisions that may be substituted (timeouts/illegal) to pass.
+    pub trial_max_substitution_rate: f64,
+    /// Whether an upload with `activate=true` may auto-activate once validated.
+    pub allow_auto_activate: bool,
+}
+
+impl Default for ValidationSettings {
+    fn default() -> Self {
+        ValidationSettings {
+            build_enabled: true,
+            build_timeout_secs: 300,
+            trial_enabled: true,
+            trial_hands: 30,
+            trial_max_substitution_rate: 0.2,
+            allow_auto_activate: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AutoscaleSettings {
+    pub enabled: bool,
+    pub min_workers: u32,
+    pub max_workers: u32,
+    /// Assumed job slots per worker replica (should match `worker.concurrency`).
+    pub worker_concurrency: u32,
+    /// Assumed bot capacity per worker replica (should match `worker.max_bots_in_flight`).
+    pub max_bots_per_worker: u32,
+    /// A nightly series must finish within this many hours of its start.
+    pub nightly_deadline_hours: f64,
+    /// An on-demand run should finish within this many minutes.
+    pub ondemand_deadline_minutes: f64,
+    /// Fallback estimate of tournament duration when no history exists: seconds per participant.
+    pub est_secs_per_participant: f64,
+    /// Minimum seconds between scale-down steps.
+    pub scale_down_cooldown_secs: u64,
+    /// Never plan below this many concurrent job slots while work is queued.
+    pub min_slots_when_busy: u32,
+}
+
+impl Default for AutoscaleSettings {
+    fn default() -> Self {
+        AutoscaleSettings {
+            enabled: true,
+            min_workers: 1,
+            max_workers: 8,
+            worker_concurrency: 2,
+            max_bots_per_worker: 1200,
+            nightly_deadline_hours: 6.0,
+            ondemand_deadline_minutes: 30.0,
+            est_secs_per_participant: 1.5,
+            scale_down_cooldown_secs: 600,
+            min_slots_when_busy: 1,
+        }
+    }
 }
 
 impl Default for PlatformSettings {
@@ -407,6 +569,8 @@ impl Default for PlatformSettings {
             max_upload_bytes: 50 * 1024 * 1024,
             registration_open: true,
             record_hands: false,
+            validation: ValidationSettings::default(),
+            autoscale: AutoscaleSettings::default(),
         }
     }
 }

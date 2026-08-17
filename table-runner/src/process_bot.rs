@@ -497,3 +497,46 @@ async fn read_line_limited<R: tokio::io::AsyncBufRead + Unpin>(
         }
     }
 }
+
+/// Raise the soft open-file limit to the hard limit (each bot needs three pipes). Returns the new
+/// soft limit. No-op on non-Unix platforms.
+#[allow(clippy::unnecessary_cast)] // rlim_t width differs across platforms
+pub fn raise_fd_limit() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        // SAFETY: plain libc calls with a valid rlimit struct.
+        unsafe {
+            let mut lim = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+                return None;
+            }
+            let mut target = lim.rlim_max;
+            // macOS reports RLIM_INFINITY but caps at kern.maxfilesperproc; cap to something sane.
+            if target == libc::RLIM_INFINITY || target > 1_048_576 {
+                target = 1_048_576;
+            }
+            if lim.rlim_cur < target {
+                let mut want = target;
+                // Try decreasing values in case the kernel rejects the maximum.
+                while want > lim.rlim_cur {
+                    let new = libc::rlimit {
+                        rlim_cur: want,
+                        rlim_max: lim.rlim_max,
+                    };
+                    if libc::setrlimit(libc::RLIMIT_NOFILE, &new) == 0 {
+                        return Some(want as u64);
+                    }
+                    want /= 2;
+                }
+            }
+            Some(lim.rlim_cur as u64)
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}

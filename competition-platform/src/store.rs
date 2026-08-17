@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS submissions (
     status TEXT NOT NULL,
     protocol_version TEXT NOT NULL,
     smoke_json TEXT,
+    checks_json TEXT,
+    auto_activate INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     validated_at TEXT
 );
@@ -120,6 +122,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     heartbeat_at TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     max_attempts INTEGER NOT NULL DEFAULT 2,
+    weight INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     finished_at TEXT,
     error TEXT,
@@ -148,6 +151,24 @@ fn json<T: serde::Serialize + ?Sized>(v: &T) -> String {
 }
 
 impl Store {
+    /// Idempotent column additions for databases created by earlier versions.
+    fn migrate(conn: &Connection) -> Result<()> {
+        let ensure = |table: &str, col: &str, decl: &str| -> Result<()> {
+            let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+            let cols: Vec<String> = st
+                .query_map([], |r| r.get::<_, String>(1))?
+                .collect::<rusqlite::Result<_>>()?;
+            if !cols.iter().any(|c| c == col) {
+                conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), [])?;
+            }
+            Ok(())
+        };
+        ensure("jobs", "weight", "INTEGER NOT NULL DEFAULT 1")?;
+        ensure("submissions", "checks_json", "TEXT")?;
+        ensure("submissions", "auto_activate", "INTEGER NOT NULL DEFAULT 0")?;
+        Ok(())
+    }
+
     pub fn open(path: &Path) -> Result<Store> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -161,6 +182,7 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Store {
             conn: Mutex::new(conn),
         })
@@ -170,6 +192,7 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate(&conn)?;
         Ok(Store {
             conn: Mutex::new(conn),
         })
@@ -371,6 +394,7 @@ impl Store {
                 )
             })?;
         let smoke: Option<String> = r.get("smoke_json")?;
+        let checks: Option<String> = r.get("checks_json")?;
         Ok(Submission {
             id: r.get("id")?,
             team_id: r.get("team_id")?,
@@ -382,6 +406,10 @@ impl Store {
             status: SubmissionStatus::parse(&r.get::<_, String>("status")?),
             protocol_version: r.get("protocol_version")?,
             smoke_test: smoke.and_then(|s| serde_json::from_str(&s).ok()),
+            checks: checks
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
+            auto_activate: r.get::<_, i64>("auto_activate")? != 0,
             created_at: r.get("created_at")?,
             validated_at: r.get("validated_at")?,
         })
@@ -395,6 +423,7 @@ impl Store {
         artifact_sha256: &str,
         artifact_size: u64,
         manifest: &Manifest,
+        auto_activate: bool,
     ) -> Result<Submission> {
         let mut c = self.c();
         let tx = c.transaction()?;
@@ -406,9 +435,20 @@ impl Store {
         let id = crate::ids::submission_id(team_id, seq as u64);
         let path = artifact_path_fn(&id);
         tx.execute(
-            "INSERT INTO submissions(id, team_id, seq, artifact_path, artifact_sha256, artifact_size, manifest_json, status, protocol_version, created_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9)",
-            params![id, team_id, seq, path, artifact_sha256, artifact_size as i64, json(manifest), manifest.protocol_version, now_str()],
+            "INSERT INTO submissions(id, team_id, seq, artifact_path, artifact_sha256, artifact_size, manifest_json, status, protocol_version, created_at, auto_activate)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?10)",
+            params![
+                id,
+                team_id,
+                seq,
+                path,
+                artifact_sha256,
+                artifact_size as i64,
+                json(manifest),
+                manifest.protocol_version,
+                now_str(),
+                auto_activate as i64
+            ],
         )?;
         let sub = tx.query_row(
             "SELECT * FROM submissions WHERE id = ?1",
@@ -464,6 +504,31 @@ impl Store {
             params![status.as_str(), smoke.map(json), validated_at, id],
         )?;
         Ok(())
+    }
+
+    /// Persist the pipeline reports (and optionally move the status).
+    pub fn set_submission_checks(
+        &self,
+        id: &str,
+        checks: &[CheckReport],
+        status: Option<SubmissionStatus>,
+    ) -> Result<()> {
+        self.c().execute(
+            "UPDATE submissions SET checks_json = ?1, status = COALESCE(?2, status) WHERE id = ?3",
+            params![json(checks), status.map(|s| s.as_str()), id],
+        )?;
+        Ok(())
+    }
+
+    /// Submissions still in the pipeline that were created more than `secs` ago.
+    pub fn stale_in_progress_submissions(&self, secs: i64) -> Result<Vec<Submission>> {
+        let cutoff = fmt_time(&(now() - ChronoDuration::seconds(secs)));
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT * FROM submissions WHERE status IN ('pending','scanning','building','smoke_testing','trial_running') AND created_at < ?1",
+        )?;
+        let rows = st.query_map(params![cutoff], Self::row_submission)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn active_submission_id(&self, team_id: &str) -> Result<Option<String>> {
@@ -928,6 +993,7 @@ impl Store {
             heartbeat_at: r.get("heartbeat_at")?,
             attempts: r.get::<_, i64>("attempts")? as u32,
             max_attempts: r.get::<_, i64>("max_attempts")? as u32,
+            weight: r.get::<_, i64>("weight").unwrap_or(1) as u32,
             created_at: r.get("created_at")?,
             finished_at: r.get("finished_at")?,
             error: r.get("error")?,
@@ -943,29 +1009,55 @@ impl Store {
         priority: i64,
         max_attempts: u32,
     ) -> Result<i64> {
+        self.enqueue_weighted(job_type, payload, run_id, priority, max_attempts, 1)
+    }
+
+    /// Enqueue with a capacity weight (e.g. the number of bots a tournament will spawn).
+    pub fn enqueue_weighted(
+        &self,
+        job_type: &str,
+        payload: &serde_json::Value,
+        run_id: Option<&str>,
+        priority: i64,
+        max_attempts: u32,
+        weight: u32,
+    ) -> Result<i64> {
         let c = self.c();
         c.execute(
-            "INSERT INTO jobs(type, payload_json, status, priority, run_id, attempts, max_attempts, created_at)
-             VALUES(?1, ?2, 'queued', ?3, ?4, 0, ?5, ?6)",
-            params![job_type, json(payload), priority, run_id, max_attempts as i64, now_str()],
+            "INSERT INTO jobs(type, payload_json, status, priority, run_id, attempts, max_attempts, created_at, weight)
+             VALUES(?1, ?2, 'queued', ?3, ?4, 0, ?5, ?6, ?7)",
+            params![job_type, json(payload), priority, run_id, max_attempts as i64, now_str(), weight.max(1) as i64],
         )?;
         Ok(c.last_insert_rowid())
     }
 
     /// Atomically claim the next queued job of one of `types`.
     pub fn claim_job(&self, worker_id: &str, types: &[&str]) -> Result<Option<Job>> {
-        if types.is_empty() {
+        self.claim_job_with_capacity(worker_id, types, u32::MAX)
+    }
+
+    /// Like [`Store::claim_job`] but only jobs whose `weight` fits within `max_weight`.
+    pub fn claim_job_with_capacity(
+        &self,
+        worker_id: &str,
+        types: &[&str],
+        max_weight: u32,
+    ) -> Result<Option<Job>> {
+        if types.is_empty() || max_weight == 0 {
             return Ok(None);
         }
         let placeholders = types.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "UPDATE jobs SET status = 'running', locked_by = ?1, locked_at = ?2, heartbeat_at = ?2, attempts = attempts + 1
-             WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND type IN ({placeholders}) ORDER BY priority DESC, id ASC LIMIT 1)
+             WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND weight <= ?3 AND type IN ({placeholders}) ORDER BY priority DESC, id ASC LIMIT 1)
              RETURNING *"
         );
         let now = now_str();
-        let mut args: Vec<Box<dyn rusqlite::ToSql>> =
-            vec![Box::new(worker_id.to_string()), Box::new(now)];
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(worker_id.to_string()),
+            Box::new(now),
+            Box::new(max_weight as i64),
+        ];
         for t in types {
             args.push(Box::new(t.to_string()));
         }
@@ -1052,6 +1144,97 @@ impl Store {
             params![now_str(), run_id],
         )?;
         Ok(n)
+    }
+
+    /// Queued+running jobs grouped by run: (run_id, type, count, total weight).
+    #[allow(clippy::type_complexity)]
+    pub fn queued_work(&self) -> Result<Vec<(Option<String>, String, i64, i64)>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT run_id, type, COUNT(*), SUM(weight) FROM jobs WHERE status IN ('queued','running') GROUP BY run_id, type",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+            ))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Duration statistics of completed tournaments of a run: (count, mean seconds, last seconds).
+    pub fn tournament_duration_stats(&self, run_id: &str) -> Result<(usize, f64, f64)> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT started_at, finished_at FROM tournaments WHERE run_id = ?1 AND status = 'completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL ORDER BY finished_at ASC",
+        )?;
+        let rows = st.query_map(params![run_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut durations = Vec::new();
+        for row in rows {
+            let (a, b) = row?;
+            if let (Some(a), Some(b)) = (crate::ids::parse_time(&a), crate::ids::parse_time(&b)) {
+                durations.push((b - a).num_milliseconds() as f64 / 1000.0);
+            }
+        }
+        if durations.is_empty() {
+            return Ok((0, 0.0, 0.0));
+        }
+        let mean = durations.iter().sum::<f64>() / durations.len() as f64;
+        Ok((durations.len(), mean, *durations.last().unwrap()))
+    }
+
+    /// Mean duration (seconds) of recently completed tournaments with a similar participant
+    /// count, for first-tournament estimates.
+    pub fn historical_tournament_secs(&self, participants: usize) -> Result<Option<f64>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT t.started_at, t.finished_at, r.snapshot_json FROM tournaments t JOIN runs r ON r.id = t.run_id
+             WHERE t.status = 'completed' AND t.started_at IS NOT NULL AND t.finished_at IS NOT NULL
+             ORDER BY t.finished_at DESC LIMIT 200",
+        )?;
+        let rows = st.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut best: Vec<f64> = Vec::new();
+        for row in rows {
+            let (a, b, snap) = row?;
+            let n = serde_json::from_str::<Vec<serde_json::Value>>(&snap)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let close =
+                (n as f64 - participants as f64).abs() <= (participants as f64 * 0.25).max(3.0);
+            if !close {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (crate::ids::parse_time(&a), crate::ids::parse_time(&b)) {
+                best.push((b - a).num_milliseconds() as f64 / 1000.0);
+            }
+            if best.len() >= 20 {
+                break;
+            }
+        }
+        if best.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(best.iter().sum::<f64>() / best.len() as f64))
+        }
+    }
+
+    pub fn active_runs(&self) -> Result<Vec<Run>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT * FROM runs WHERE status IN ('queued','running','finalizing') ORDER BY created_at ASC",
+        )?;
+        let rows = st.query_map([], Self::row_run)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn queue_depth(&self) -> Result<Vec<(String, String, i64)>> {
@@ -1162,6 +1345,8 @@ mod tests {
             entrypoint: "bot.py".into(),
             runtime: "python3".into(),
             args: vec![],
+            build: vec![],
+            build_timeout_secs: None,
             notes: None,
             protocol_version: "1".into(),
         }
@@ -1198,6 +1383,7 @@ mod tests {
                 "sha",
                 10,
                 &manifest(),
+                false,
             )
             .unwrap();
         assert_eq!(sub.id, "sub_tm_a_0001");
@@ -1209,8 +1395,10 @@ mod tests {
                 "sha",
                 10,
                 &manifest(),
+                true,
             )
             .unwrap();
+        assert!(sub2.auto_activate);
         assert_eq!(sub2.seq, 2);
         s.set_submission_status(&sub.id, SubmissionStatus::Validated, None)
             .unwrap();
@@ -1265,6 +1453,42 @@ mod tests {
         assert_eq!(s.fail_job(id, "boom", true).unwrap(), JobStatus::Failed);
         s.complete_job(j.id, None).unwrap();
         assert_eq!(s.job(j.id).unwrap().unwrap().status, JobStatus::Done);
+        // weighted claims: a 500-bot tournament is skipped by a worker with room for 100
+        let heavy = s
+            .enqueue_weighted(
+                "run_tournament",
+                &serde_json::json!({}),
+                Some("run_2"),
+                0,
+                2,
+                500,
+            )
+            .unwrap();
+        let light = s
+            .enqueue_weighted(
+                "run_tournament",
+                &serde_json::json!({}),
+                Some("run_2"),
+                0,
+                2,
+                50,
+            )
+            .unwrap();
+        let j = s
+            .claim_job_with_capacity("w3", &["run_tournament"], 100)
+            .unwrap()
+            .unwrap();
+        assert_eq!(j.id, light);
+        assert!(s
+            .claim_job_with_capacity("w3", &["run_tournament"], 100)
+            .unwrap()
+            .is_none());
+        let j = s
+            .claim_job_with_capacity("w4", &["run_tournament"], 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(j.id, heavy);
+        assert_eq!(j.weight, 500);
     }
 
     #[test]

@@ -308,6 +308,64 @@ mod tests {
         assert_eq!(s.tiebreak(), vec![Rank::Ten]);
     }
 
+    /// Every one of the C(52,5) = 2,598,960 five-card hands, checked against the classic
+    /// frequency table. This is an independent check of the evaluator's category logic.
+    #[test]
+    fn five_card_category_distribution_matches_known_counts() {
+        let all = crate::cards::Card::all();
+        let mut counts = [0u64; 9];
+        let mut best_seen = HandStrength(0);
+        for a in 0..52 {
+            for b in (a + 1)..52 {
+                for c in (b + 1)..52 {
+                    for d in (c + 1)..52 {
+                        for e in (d + 1)..52 {
+                            let s = evaluate_five(&[all[a], all[b], all[c], all[d], all[e]]);
+                            counts[s.category() as usize] += 1;
+                            if s > best_seen {
+                                best_seen = s;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(counts.iter().sum::<u64>(), 2_598_960);
+        assert_eq!(counts[HandCategory::StraightFlush as usize], 40);
+        assert_eq!(counts[HandCategory::FourOfAKind as usize], 624);
+        assert_eq!(counts[HandCategory::FullHouse as usize], 3_744);
+        assert_eq!(counts[HandCategory::Flush as usize], 5_108);
+        assert_eq!(counts[HandCategory::Straight as usize], 10_200);
+        assert_eq!(counts[HandCategory::ThreeOfAKind as usize], 54_912);
+        assert_eq!(counts[HandCategory::TwoPair as usize], 123_552);
+        assert_eq!(counts[HandCategory::Pair as usize], 1_098_240);
+        assert_eq!(counts[HandCategory::HighCard as usize], 1_302_540);
+        // The best possible hand is a royal flush.
+        assert_eq!(best_seen.category(), HandCategory::StraightFlush);
+        assert_eq!(best_seen.tiebreak(), vec![Rank::Ace]);
+    }
+
+    /// Distinct strengths within a category must order by the classic tie-break rules; check the
+    /// number of distinct 5-card hand classes (7462) as a whole-evaluator fingerprint.
+    #[test]
+    fn number_of_distinct_hand_classes_is_7462() {
+        let all = crate::cards::Card::all();
+        let mut classes = std::collections::HashSet::new();
+        for a in 0..52 {
+            for b in (a + 1)..52 {
+                for c in (b + 1)..52 {
+                    for d in (c + 1)..52 {
+                        for e in (d + 1)..52 {
+                            classes
+                                .insert(evaluate_five(&[all[a], all[b], all[c], all[d], all[e]]).0);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(classes.len(), 7462);
+    }
+
     #[test]
     fn full_house_prefers_higher_trips() {
         let a = evaluate_cards(&parse_cards("As Ad Ah Kc Ks Kd 2c").unwrap());

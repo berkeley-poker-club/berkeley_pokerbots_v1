@@ -25,6 +25,25 @@ fn fast_cfg() -> TournamentConfig {
     }
 }
 
+/// Chips are conserved across every hand, table break and reseat: the winner ends with everything.
+fn assert_chips_conserved(out: &tournament_core::TournamentOutcome, cfg: &TournamentConfig) {
+    let total: i64 = out.final_stacks.values().sum();
+    assert_eq!(
+        total,
+        out.num_players as i64 * cfg.starting_stack,
+        "chips leaked or duplicated"
+    );
+    if out.aborted.is_none() {
+        let w = out.winner.unwrap();
+        assert_eq!(out.final_stacks[&w], total, "winner should hold every chip");
+        assert!(out
+            .final_stacks
+            .iter()
+            .filter(|(p, _)| **p != w)
+            .all(|(_, s)| *s == 0));
+    }
+}
+
 fn random_players(n: u32, seed: u64) -> Vec<Arc<dyn Player>> {
     (1..=n)
         .map(|i| {
@@ -66,6 +85,7 @@ async fn heads_up_tournament_produces_winner_and_loser() {
     assert_eq!(out.placements[&loser], 2);
     assert!(out.total_hands > 0);
     assert_eq!(out.eliminations.len(), 1);
+    assert_chips_conserved(&out, &fast_cfg());
 }
 
 #[tokio::test]
@@ -120,6 +140,7 @@ async fn multi_table_tournament_breaks_tables_and_places_everyone() {
             assert_eq!(out.placements[&a.player_id], out.placements[&b.player_id]);
         }
     }
+    assert_chips_conserved(&out, &fast_cfg());
     assert!(out.levels_reached >= 3, "blinds should have advanced");
     assert!(
         out.total_hands >= 3 * 10,
@@ -184,6 +205,7 @@ async fn two_hundred_player_tournament_completes() {
         .await;
     assert!(out.aborted.is_none(), "{:?}", out.aborted);
     assert_eq!(out.placements.len(), 200);
+    assert_chips_conserved(&out, &fast_cfg());
     eprintln!(
         "200-player tournament: {} hands, {} levels, {:?}",
         out.total_hands,

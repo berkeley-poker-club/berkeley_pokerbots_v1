@@ -14,6 +14,7 @@ pub struct PlatformConfig {
     pub worker: WorkerConfig,
     pub sandbox: SandboxConfig,
     pub scheduler: SchedulerConfig,
+    pub autoscaler: AutoscalerConfig,
     /// Initial runtime settings, applied when the database has none (later editable via
     /// `PATCH /admin/config`).
     pub defaults: PlatformSettings,
@@ -67,6 +68,10 @@ impl Default for StorageConfig {
 pub struct WorkerConfig {
     /// Jobs (tournaments) a worker process runs concurrently.
     pub concurrency: usize,
+    /// Maximum bots this worker will host at once. A tournament job with more participants than
+    /// the remaining capacity is left for another worker. Must be at least the largest expected
+    /// field (e.g. 500).
+    pub max_bots_in_flight: u32,
     pub poll_interval_ms: u64,
     pub heartbeat_secs: u64,
     /// Running jobs without a heartbeat for this long are re-queued.
@@ -79,6 +84,7 @@ impl Default for WorkerConfig {
     fn default() -> Self {
         WorkerConfig {
             concurrency: 2,
+            max_bots_in_flight: 600,
             poll_interval_ms: 1000,
             heartbeat_secs: 20,
             stale_job_secs: 300,
@@ -141,6 +147,33 @@ impl Default for DockerConfig {
             cpus: 1.0,
             images,
             extra_args: vec![],
+        }
+    }
+}
+
+/// How the autoscaler acts on its plan.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AutoscalerConfig {
+    /// `off` (plan only, visible via /admin/autoscale), `processes` (spawn/stop local
+    /// `tournament-worker` processes), or `command` (run `scale_command` with `{n}`).
+    pub backend: String,
+    pub poll_secs: u64,
+    /// Path to the tournament-worker binary for the `processes` backend. Defaults to a sibling of
+    /// the current executable.
+    pub worker_binary: Option<String>,
+    /// Shell command template for the `command` backend; `{n}` is replaced by the desired
+    /// replica count (e.g. `docker compose -f deploy/docker-compose.yml up -d --scale worker={n} --no-recreate`).
+    pub scale_command: Option<String>,
+}
+
+impl Default for AutoscalerConfig {
+    fn default() -> Self {
+        AutoscalerConfig {
+            backend: "off".into(),
+            poll_secs: 20,
+            worker_binary: None,
+            scale_command: None,
         }
     }
 }

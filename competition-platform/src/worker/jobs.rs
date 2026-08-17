@@ -1,11 +1,13 @@
 //! Job handlers.
 
 use super::Worker;
+use crate::ids::now_str;
 use crate::models::*;
 use crate::runs::{finalize_run, maybe_finalize};
 use crate::sandbox::BotLaunch;
 use anyhow::{anyhow, Context, Result};
 use poker_utils::PlayerId;
+use poker_utils::{Deck, HandParams, PublicEvent};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,7 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use table_runner::{
-    smoke_test, FoldStrategy, LocalBot, Player, ProcessBot, SmokeFailure, SmokeReport,
+    play_hand, smoke_test, CallStrategy, FoldStrategy, LocalBot, Player, ProcessBot, RaiseStrategy,
+    SmokeFailure, SmokeReport,
 };
 use tournament_core::{HandRecord, TournamentDirector};
 
@@ -66,8 +69,15 @@ impl Worker {
         })
     }
 
-    // ------------------------------------------------------------ smoke_validate_submission
+    // ------------------------------------------------------------ validation pipeline
 
+    /// Validate a submission through three stages, each recorded as a [`CheckReport`]:
+    /// 1. **build** — run the manifest's build command (or a default syntax/compile check),
+    /// 2. **smoke** — the protocol smoke test,
+    /// 3. **trial** — a short 3-handed match against reference bots, measuring how often the
+    ///    engine had to substitute actions (timeouts / illegal moves / crashes).
+    ///
+    /// On success the submission becomes `validated` (and is auto-activated when requested).
     pub(super) async fn job_smoke_validate(&self, job: &Job) -> Result<Value> {
         let submission_id = payload_str(job, "submission_id")?;
         let sub = self
@@ -75,35 +85,274 @@ impl Worker {
             .submission(submission_id)?
             .ok_or_else(|| anyhow!("submission {} not found", submission_id))?;
         let settings = self.store.settings()?;
+        let v = &settings.validation;
+        let mut checks: Vec<CheckReport> = vec![
+            CheckReport::pending(CheckStage::Build),
+            CheckReport::pending(CheckStage::Smoke),
+            CheckReport::pending(CheckStage::Trial),
+        ];
+        let save = |store: &crate::store::Store,
+                    checks: &[CheckReport],
+                    status: Option<SubmissionStatus>| {
+            let _ = store.set_submission_checks(&sub.id, checks, status);
+        };
+
+        // ---- unpack once
+        let unpacked = self
+            .artifacts
+            .unpack(&sub.id, &sub.artifact_path, &sub.manifest)
+            .with_context(|| format!("unpacking artifact for {}", sub.id));
+        let unpacked = match unpacked {
+            Ok(d) => d,
+            Err(e) => {
+                checks[0].status = CheckStatus::Failed;
+                checks[0].summary = format!("{e:#}");
+                checks[0].finished_at = Some(now_str());
+                let report = setup_failure(format!("{e:#}"));
+                save(&self.store, &checks, None);
+                self.store.set_submission_status(
+                    &sub.id,
+                    SubmissionStatus::Rejected,
+                    Some(&report),
+                )?;
+                return Ok(json!({ "passed": false, "stage": "build", "message": report.message }));
+            }
+        };
+        let runtime = sub.manifest.effective_runtime().to_string();
+        let entrypoint = sub.manifest.entrypoint.trim_start_matches("./").to_string();
+
+        // ---- stage 1: build / compile check
+        if v.build_enabled {
+            checks[0].status = CheckStatus::Running;
+            checks[0].started_at = Some(now_str());
+            save(&self.store, &checks, Some(SubmissionStatus::Building));
+            let argv: Vec<String> = if !sub.manifest.build.is_empty() {
+                sub.manifest.build.clone()
+            } else {
+                match runtime.as_str() {
+                    "python3" => vec![
+                        "python3".into(),
+                        "-m".into(),
+                        "py_compile".into(),
+                        entrypoint.clone(),
+                    ],
+                    "node" => vec!["node".into(), "--check".into(), entrypoint.clone()],
+                    _ => vec![],
+                }
+            };
+            if argv.is_empty() {
+                checks[0].status = CheckStatus::Skipped;
+                checks[0].summary = format!("no build step for runtime '{runtime}'");
+            } else {
+                let timeout = Duration::from_secs(
+                    sub.manifest
+                        .build_timeout_secs
+                        .unwrap_or(v.build_timeout_secs)
+                        .clamp(1, 3600),
+                );
+                let out = self
+                    .sandbox
+                    .run_command(&unpacked, &argv, &runtime, timeout, true)
+                    .await;
+                match out {
+                    Ok(o) if o.ok() => {
+                        checks[0].status = CheckStatus::Passed;
+                        checks[0].summary = format!("`{}` succeeded", argv.join(" "));
+                        checks[0].details =
+                            json!({ "stdout_tail": o.stdout_tail, "stderr_tail": o.stderr_tail });
+                    }
+                    Ok(o) => {
+                        checks[0].status = CheckStatus::Failed;
+                        checks[0].summary = if o.timed_out {
+                            format!("build timed out after {}s", timeout.as_secs())
+                        } else {
+                            format!("`{}` exited with code {:?}", argv.join(" "), o.exit_code)
+                        };
+                        checks[0].details =
+                            json!({ "stdout_tail": o.stdout_tail, "stderr_tail": o.stderr_tail });
+                    }
+                    Err(e) => {
+                        checks[0].status = CheckStatus::Failed;
+                        checks[0].summary = format!("build could not run: {e:#}");
+                    }
+                }
+            }
+            checks[0].finished_at = Some(now_str());
+            if checks[0].status == CheckStatus::Failed {
+                let report = SmokeReport {
+                    passed: false,
+                    first_latency_ms: 0,
+                    latency_ms: 0,
+                    reason: Some(SmokeFailure::SetupFailed),
+                    message: format!("build failed: {}", checks[0].summary),
+                    stderr_tail: checks[0]
+                        .details
+                        .get("stderr_tail")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    actions: vec![],
+                };
+                save(&self.store, &checks, None);
+                self.store.set_submission_status(
+                    &sub.id,
+                    SubmissionStatus::Rejected,
+                    Some(&report),
+                )?;
+                return Ok(
+                    json!({ "passed": false, "stage": "build", "message": checks[0].summary }),
+                );
+            }
+        } else {
+            checks[0].status = CheckStatus::Skipped;
+            checks[0].summary = "build stage disabled".into();
+        }
+
+        // ---- stage 2: protocol smoke test
+        checks[1].status = CheckStatus::Running;
+        checks[1].started_at = Some(now_str());
+        save(&self.store, &checks, Some(SubmissionStatus::SmokeTesting));
         let session = format!("smoke-{}", sub.id);
         let log_dir = self.logs_dir().join("smoke");
         let _ = std::fs::create_dir_all(&log_dir);
-        let stderr_log = Some(log_dir.join(format!("{}.log", sub.id)));
-
-        let report =
-            match self.launch_for(&sub, 1, format!("smoke:{}", sub.id), &session, stderr_log) {
-                Err(e) => setup_failure(format!("{e:#}")),
-                Ok(launch) => match self.sandbox.spawn(&launch).await {
-                    Err(e) => setup_failure(format!("could not start bot: {e:#}")),
-                    Ok(bot) => {
-                        let report =
-                            smoke_test(&bot, Duration::from_millis(settings.smoke_timeout_ms))
-                                .await;
-                        bot.shutdown().await;
-                        report
-                    }
-                },
-            };
-        self.sandbox.cleanup_session(&session).await;
-        let status = if report.passed {
-            SubmissionStatus::Validated
-        } else {
-            SubmissionStatus::Rejected
+        let launch = BotLaunch {
+            player_id: 1,
+            display_name: format!("smoke:{}", sub.id),
+            session: session.clone(),
+            artifact_dir: unpacked.clone(),
+            entrypoint: entrypoint.clone(),
+            runtime: runtime.clone(),
+            args: sub.manifest.args.clone(),
+            stderr_log: Some(log_dir.join(format!("{}.log", sub.id))),
         };
+        let report = match self.sandbox.spawn(&launch).await {
+            Err(e) => setup_failure(format!("could not start bot: {e:#}")),
+            Ok(bot) => {
+                let r = smoke_test(&bot, Duration::from_millis(settings.smoke_timeout_ms)).await;
+                bot.shutdown().await;
+                r
+            }
+        };
+        self.sandbox.cleanup_session(&session).await;
+        checks[1].status = if report.passed {
+            CheckStatus::Passed
+        } else {
+            CheckStatus::Failed
+        };
+        checks[1].summary = report.message.clone();
+        checks[1].details = json!({
+            "reason": report.reason,
+            "first_latency_ms": report.first_latency_ms,
+            "latency_ms": report.latency_ms,
+        });
+        checks[1].finished_at = Some(now_str());
+        if !report.passed {
+            save(&self.store, &checks, None);
+            self.store
+                .set_submission_status(&sub.id, SubmissionStatus::Rejected, Some(&report))?;
+            return Ok(json!({ "passed": false, "stage": "smoke", "message": report.message }));
+        }
+
+        // ---- stage 3: trial run against reference bots
+        if v.trial_enabled && v.trial_hands > 0 {
+            checks[2].status = CheckStatus::Running;
+            checks[2].started_at = Some(now_str());
+            save(&self.store, &checks, Some(SubmissionStatus::TrialRunning));
+            let trial_session = format!("trial-{}", sub.id);
+            let launch = BotLaunch {
+                session: trial_session.clone(),
+                display_name: format!("trial:{}", sub.id),
+                ..launch
+            };
+            match self.sandbox.spawn(&launch).await {
+                Err(e) => {
+                    checks[2].status = CheckStatus::Failed;
+                    checks[2].summary = format!("could not start bot for trial: {e:#}");
+                }
+                Ok(bot) => {
+                    let bot = Arc::new(bot);
+                    let outcome = trial_match(
+                        Arc::clone(&bot) as Arc<dyn Player>,
+                        v.trial_hands,
+                        settings.tournament.action_timeout_ms,
+                    )
+                    .await;
+                    bot.shutdown().await;
+                    let rate = outcome.substitution_rate();
+                    checks[2].details = json!({
+                        "hands": outcome.hands,
+                        "decisions": outcome.decisions,
+                        "substitutions": outcome.substitutions,
+                        "substitution_rate": rate,
+                        "max_substitution_rate": v.trial_max_substitution_rate,
+                        "bot_survived": outcome.bot_alive,
+                    });
+                    if !outcome.bot_alive {
+                        checks[2].status = CheckStatus::Failed;
+                        checks[2].summary = format!(
+                            "bot process died during the trial (hand {}/{})",
+                            outcome.hands, v.trial_hands
+                        );
+                    } else if rate > v.trial_max_substitution_rate {
+                        checks[2].status = CheckStatus::Failed;
+                        checks[2].summary = format!(
+                            "{:.0}% of decisions timed out or were illegal (limit {:.0}%)",
+                            rate * 100.0,
+                            v.trial_max_substitution_rate * 100.0
+                        );
+                    } else if outcome.substitutions > 0 {
+                        checks[2].status = CheckStatus::Warned;
+                        checks[2].summary = format!(
+                            "passed with {} substituted decision(s) out of {} over {} hands",
+                            outcome.substitutions, outcome.decisions, outcome.hands
+                        );
+                    } else {
+                        checks[2].status = CheckStatus::Passed;
+                        checks[2].summary = format!(
+                            "clean: {} decisions over {} hands, no timeouts or illegal actions",
+                            outcome.decisions, outcome.hands
+                        );
+                    }
+                }
+            }
+            self.sandbox.cleanup_session(&trial_session).await;
+            checks[2].finished_at = Some(now_str());
+            if checks[2].status == CheckStatus::Failed {
+                let fail = SmokeReport {
+                    passed: false,
+                    first_latency_ms: report.first_latency_ms,
+                    latency_ms: report.latency_ms,
+                    reason: Some(SmokeFailure::Timeout),
+                    message: format!("trial run failed: {}", checks[2].summary),
+                    stderr_tail: report.stderr_tail.clone(),
+                    actions: report.actions.clone(),
+                };
+                save(&self.store, &checks, None);
+                self.store.set_submission_status(
+                    &sub.id,
+                    SubmissionStatus::Rejected,
+                    Some(&fail),
+                )?;
+                return Ok(
+                    json!({ "passed": false, "stage": "trial", "message": checks[2].summary }),
+                );
+            }
+        } else {
+            checks[2].status = CheckStatus::Skipped;
+            checks[2].summary = "trial stage disabled".into();
+        }
+
+        // ---- validated (and optionally auto-activated)
+        save(&self.store, &checks, None);
         self.store
-            .set_submission_status(&sub.id, status, Some(&report))?;
-        tracing::info!(submission = %sub.id, passed = report.passed, reason = ?report.reason, "smoke test finished");
-        Ok(serde_json::to_value(&report)?)
+            .set_submission_status(&sub.id, SubmissionStatus::Validated, Some(&report))?;
+        let mut activated = false;
+        if sub.auto_activate && v.allow_auto_activate {
+            self.store.activate(&sub.team_id, &sub.id)?;
+            activated = true;
+        }
+        tracing::info!(submission = %sub.id, activated, "validation pipeline passed");
+        Ok(json!({ "passed": true, "activated": activated }))
     }
 
     // ------------------------------------------------------------ run_series
@@ -140,12 +389,13 @@ impl Worker {
         let mut enqueued = 0;
         for t in self.store.tournaments(run_id)? {
             if t.status == TournamentStatus::Queued && !existing.contains(&(t.index as u64)) {
-                self.store.enqueue(
+                self.store.enqueue_weighted(
                     job_types::RUN_TOURNAMENT,
                     &json!({ "run_id": run_id, "index": t.index }),
                     Some(run_id),
                     priority,
                     2,
+                    run.participants.len() as u32,
                 )?;
                 enqueued += 1;
             }
@@ -429,4 +679,72 @@ fn sanitize(id: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Outcome of the trial stage: N three-handed hands of (bot, call station, min-raiser).
+pub struct TrialOutcome {
+    pub hands: u32,
+    pub decisions: u32,
+    pub substitutions: u32,
+    pub bot_alive: bool,
+}
+
+impl TrialOutcome {
+    pub fn substitution_rate(&self) -> f64 {
+        if self.decisions == 0 {
+            1.0
+        } else {
+            self.substitutions as f64 / self.decisions as f64
+        }
+    }
+}
+
+/// Play `hands` quick 3-handed hands with the candidate in seat 0. Stacks reset every hand so the
+/// bot always has decisions to make; the button rotates.
+pub async fn trial_match(bot: Arc<dyn Player>, hands: u32, action_timeout_ms: u64) -> TrialOutcome {
+    let call: Arc<dyn Player> = Arc::new(LocalBot::new(2, CallStrategy).named("trial-call"));
+    let raise: Arc<dyn Player> = Arc::new(LocalBot::new(3, RaiseStrategy).named("trial-raise"));
+    let players: Vec<Option<Arc<dyn Player>>> =
+        vec![Some(Arc::clone(&bot)), Some(call), Some(raise)];
+    let mut out = TrialOutcome {
+        hands: 0,
+        decisions: 0,
+        substitutions: 0,
+        bot_alive: true,
+    };
+    for i in 0..hands {
+        let params = HandParams {
+            hand_id: i as u64 + 1,
+            table_id: 0,
+            rules: poker_utils::HandRules {
+                small_blind: 5,
+                big_blind: 10,
+                ante: 0,
+            },
+            button: (i % 3) as u8,
+            seats: vec![Some((1, 1000)), Some((2, 1000)), Some((3, 1000))],
+            deck: Deck::new(0xC0FFEE ^ i as u64),
+        };
+        match play_hand(params, &players, Duration::from_millis(action_timeout_ms)).await {
+            Ok((_result, log)) => {
+                out.hands += 1;
+                for ev in &log {
+                    match ev {
+                        PublicEvent::ActionTaken { seat: 0, .. } => out.decisions += 1,
+                        PublicEvent::ActionSubstituted { seat: 0, .. } => {
+                            out.decisions += 1;
+                            out.substitutions += 1;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+        if !bot.is_alive() {
+            out.bot_alive = false;
+            break;
+        }
+    }
+    out
 }

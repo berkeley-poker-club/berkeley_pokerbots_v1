@@ -9,6 +9,7 @@
 
 pub mod api;
 pub mod artifacts;
+pub mod autoscale;
 pub mod config;
 pub mod ids;
 pub mod models;

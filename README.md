@@ -1,15 +1,17 @@
 # Berkeley Pokerbots
 
 A complete No-Limit Hold'em tournament platform for bot competitions: a rules-correct engine,
-multi-table tournament director, JSON-lines bot protocol, and a competition service (submissions,
-sandboxed workers, nightly series, geometric-mean leaderboard) for ~200 concurrent bots.
+multi-table tournament director, JSON-lines bot protocol, and a competition service — web UI +
+API submissions with a build/smoke/trial validation pipeline, sandboxed autoscaling workers,
+nightly series and a geometric-mean leaderboard — verified end-to-end with **500 concurrent
+bots**.
 
 ```
 poker-utils/           pure NLHE engine: cards, hand evaluation, Hand state machine, config
 table-runner/          Player trait, ProcessBot (JSON-lines protocol), in-process bots, table task, smoke test
 tournament-core/       TournamentDirector (table breaking, blind levels, SPEC placements), series + scoring
 pokerbots-cli/         `pokerbots`: local tournaments/series, smoke tests, stdio reference bots, load tests
-competition-platform/  `competition-api` + `tournament-worker`: SQLite store, artifacts, sandbox, jobs, API, scheduler
+competition-platform/  `competition-api` + `tournament-worker`: SQLite store, artifacts, sandbox, jobs, API, web UI, scheduler, autoscaler
 bots/python/           SDK, reference bots (fold / call / raise / random) and a student template
 docs/                  BOT_PROTOCOL.md, openapi.yaml, QUICKSTART.md, OPERATIONS.md
 deploy/                Dockerfile, docker-compose.yml
@@ -41,8 +43,16 @@ Run the competition server (single box, embedded worker):
 ```bash
 ./target/release/competition-api --print-example-config > pokerbots.toml   # edit admin_key
 POKERBOTS_ADMIN_KEY=secret ./target/release/competition-api
+open http://localhost:8080/          # thin web UI: register, upload, activate, leaderboard
 curl -s -X POST localhost:8080/api/v1/auth/register -H 'content-type: application/json' -d '{"team_name":"ace-high"}'
 ```
+
+Uploads pass a three-stage pipeline before they can play — **build** (compile/syntax check),
+**smoke** (protocol handshake), **trial** (~30 hands vs reference bots; rejects bots that crash
+or time out) — then join the next run. With `[autoscaler]` configured, the platform sizes its own
+worker fleet from queued work and run deadlines (single-box `processes` backend, or a `command`
+backend for docker compose / k8s / cloud fleets); see `GET /admin/autoscale` and
+[docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 Then follow [docs/QUICKSTART.md](docs/QUICKSTART.md) (students) and
 [docs/OPERATIONS.md](docs/OPERATIONS.md) (staff). The API is described in

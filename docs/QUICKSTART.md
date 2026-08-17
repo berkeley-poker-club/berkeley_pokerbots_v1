@@ -2,6 +2,11 @@
 
 Everything you need to go from zero to a bot on the leaderboard.
 
+> **Prefer a browser?** The server hosts a thin web UI at the root URL
+> (`https://pokerbots.example.edu/`): register your team, drag-and-drop your bot, watch the
+> validation stages, activate, and follow the leaderboard — no curl required. The steps below do
+> the same over the raw API.
+
 ## 1. Write a bot
 
 Start from [`bots/python/template_bot.py`](../bots/python/template_bot.py) (Python 3.9+, no
@@ -48,9 +53,17 @@ curl -s -X POST $PB/submissions -H "X-Api-Key: $PB_KEY" \
   -F 'manifest={"language":"python","runtime":"python3","entrypoint":"my_bot.py","protocol_version":"1"}'
 ```
 
-* `201` → `{"submission_id":"sub_tm_..._0001","status":"validated","smoke_test":{"passed":true,...}}`
-* `422` → the smoke test failed; `error.details.reason` and `error.details.stderr_tail` tell you why.
-* `202` → the smoke test is still running (rare); poll `GET /submissions/{id}`.
+Every upload runs three checks before it is accepted: **build** (compile / syntax check — set
+`"build": ["make"]` in the manifest for compiled bots), **smoke** (protocol handshake + two legal
+decisions) and a **trial** of ~30 real hands against reference bots (rejects bots that crash or
+time out on more than 20% of decisions).
+
+* `201` → `{"status":"validated","checks":[{"stage":"build","status":"passed"},...]}`
+* `422` → validation failed; `error.details.stage`, `error.details.stage_summary` and
+  `error.details.stderr_tail` tell you exactly where and why.
+* `202` → validation still running (rare); poll `GET /submissions/{id}`.
+
+Add `-F activate=true` to the upload to activate automatically the moment validation passes.
 
 ## 5. Activate
 
