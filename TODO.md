@@ -10,12 +10,12 @@ build→smoke→trial validation pipeline with auto-activate, the web UI at `/`,
 ## Next
 - [ ] Postgres `Store` implementation (schema is written to be portable; see `store.rs`) for
       multi-host worker fleets; S3-compatible artifact store with local cache.
-- [ ] Docker sandbox: exercised only by inspection here (no Docker on the dev machine) — run the
-      e2e test with `POKERBOTS_SANDBOX=docker` on the club server before the first nightly.
+- [x] Docker sandbox — verified live via colima (validation pipeline + tournament in containers,
+      isolation flags, cleanup). Re-verify once on the x86-64 club server before the first nightly.
 - [ ] Long-lived bot containers reused across the tournaments of a series (saves ~200 container
       starts per tournament).
 - [ ] Per-key request rate limiting at the edge (nginx) — the API only limits on-demand runs.
-- [ ] Autoscaler `command` backend has not run against a real docker compose / cloud target
-      (no Docker on the dev machine); `processes` backend is verified live.
+- [ ] Autoscaler `command` backend: template/invocation covered by a unit test, but it has not
+      driven a real docker compose / cloud target end to end; `processes` backend is verified live.
 - [ ] Berkeley SSO wrapper issuing team API keys.
 - [ ] Hand-history download for teams (currently admin-only because logs reveal hole cards).

@@ -71,7 +71,7 @@ competition server for trusted bots. Put nginx/Caddy in front for TLS.
 
 ## Docker deployment (recommended for untrusted bots)
 
-`deploy/docker-compose.yml` runs the API and two workers; workers use the **Docker sandbox**
+`deploy/docker-compose.yml` runs the API and workers; workers use the **Docker sandbox**
 (one container per bot: `--network=none`, memory/CPU/pids limits, read-only rootfs, dropped
 capabilities, unprivileged user). Notes:
 
@@ -80,7 +80,9 @@ capabilities, unprivileged user). Notes:
   inside the worker containers as on the host (`/srv/pokerbots/data` in the compose file).
 * Pre-pull bot images on the host: `docker pull python:3.12-slim node:22-slim eclipse-temurin:21-jre debian:bookworm-slim`
   (configurable in `[sandbox.docker.images]`).
-* Native bots must be Linux x86-64 static executables.
+* Native bots must be Linux executables matching the host architecture (x86-64 on typical
+  servers; the sandbox itself is architecture-agnostic and is exercised in development via
+  colima on macOS).
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d --build

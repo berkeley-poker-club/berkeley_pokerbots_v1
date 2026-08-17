@@ -8,3 +8,6 @@
 *.db-wal
 *.db-shm
 hands.jsonl
+.dockertest/
+__pycache__/
+*.pyc

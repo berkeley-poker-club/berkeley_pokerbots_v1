@@ -198,25 +198,29 @@ impl Sandbox for ProcessSandbox {
             unsafe {
                 cmd.pre_exec(move || {
                     libc::setsid();
-                    let set = |res: libc::c_int, v: u64| {
-                        let lim = libc::rlimit {
-                            rlim_cur: v as libc::rlim_t,
-                            rlim_max: v as libc::rlim_t,
-                        };
-                        libc::setrlimit(res, &lim);
-                    };
-                    set(libc::RLIMIT_CORE, 0);
+                    // The rlimit resource type differs between platforms (c_int on macOS,
+                    // __rlimit_resource_t on glibc); `as _` resolves to whichever setrlimit wants.
+                    macro_rules! set {
+                        ($res:expr, $v:expr) => {{
+                            let lim = libc::rlimit {
+                                rlim_cur: $v as libc::rlim_t,
+                                rlim_max: $v as libc::rlim_t,
+                            };
+                            libc::setrlimit($res as _, &lim);
+                        }};
+                    }
+                    set!(libc::RLIMIT_CORE, 0u64);
                     if nofile > 0 {
-                        set(libc::RLIMIT_NOFILE, nofile);
+                        set!(libc::RLIMIT_NOFILE, nofile);
                     }
                     if let Some(c) = cpu {
-                        set(libc::RLIMIT_CPU, c);
+                        set!(libc::RLIMIT_CPU, c);
                     }
                     // Address-space limits break interpreters/JVMs on macOS and are unreliable on
                     // Linux; only apply on Linux and only when generous.
                     #[cfg(target_os = "linux")]
                     if mem >= 256 {
-                        set(libc::RLIMIT_AS, mem * 1024 * 1024 * 4);
+                        set!(libc::RLIMIT_AS, mem * 1024 * 1024 * 4);
                     }
                     #[cfg(not(target_os = "linux"))]
                     let _ = mem;

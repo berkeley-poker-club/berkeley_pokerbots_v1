@@ -29,3 +29,13 @@ jobs:
             ./target/release/pokerbots smoke --bot python:bots/python/$b.py
           done
           ./target/release/pokerbots tournament --bot python:bots/python/call_bot.py --bot python:bots/python/raise_bot.py --bot builtin:random --players 27 --no-time-levels
+
+  docker-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dev container image
+        run: docker build -f .devcontainer/Dockerfile -t pokerbots-dev .
+      - name: Build production image
+        if: github.ref == 'refs/heads/main'
+        run: docker build -f deploy/Dockerfile -t pokerbots .

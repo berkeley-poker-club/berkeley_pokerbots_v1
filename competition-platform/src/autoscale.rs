@@ -407,6 +407,7 @@ impl Autoscaler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::PlatformConfig;
     use crate::models::{Participant, RunConfig};
 
     #[test]
@@ -494,6 +495,33 @@ mod tests {
         let p2 = plan(&store, &settings).unwrap();
         assert_eq!(p2.desired_workers, settings.min_workers);
         assert_eq!(p2.reason, "idle");
+    }
+
+    #[tokio::test]
+    async fn command_backend_invokes_scale_command_with_n() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("scale.log");
+        let mut cfg = PlatformConfig::default();
+        cfg.autoscaler.backend = "command".into();
+        cfg.autoscaler.scale_command = Some(format!("echo scaled-to-{{n}} >> {}", out.display()));
+        let store = Arc::new(Store::open_memory().unwrap());
+        let mut settings = store.settings().unwrap();
+        settings.autoscale.min_workers = 2;
+        settings.autoscale.max_workers = 4;
+        store.save_settings(&settings).unwrap();
+        let mut scaler = Autoscaler::new(cfg, "unused.toml".into(), Arc::clone(&store)).unwrap();
+        assert_eq!(scaler.backend_name(), "command");
+        // Idle plan => min_workers = 2; current = 0 => scale_up runs the command with {n}=2.
+        scaler.tick().await;
+        let log = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(log.trim(), "scaled-to-2");
+        // Same desired again => command not re-run.
+        scaler.tick().await;
+        assert_eq!(std::fs::read_to_string(&out).unwrap().trim(), "scaled-to-2");
+        // Status recorded for /admin/autoscale.
+        let status = store.get_setting("autoscale_status").unwrap().unwrap();
+        assert_eq!(status["backend"], "command");
+        assert_eq!(status["current_workers"], 2);
     }
 
     #[test]

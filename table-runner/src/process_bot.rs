@@ -510,7 +510,7 @@ pub fn raise_fd_limit() -> Option<u64> {
                 rlim_cur: 0,
                 rlim_max: 0,
             };
-            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) != 0 {
+            if libc::getrlimit(libc::RLIMIT_NOFILE as _, &mut lim) != 0 {
                 return None;
             }
             let mut target = lim.rlim_max;
@@ -526,7 +526,7 @@ pub fn raise_fd_limit() -> Option<u64> {
                         rlim_cur: want,
                         rlim_max: lim.rlim_max,
                     };
-                    if libc::setrlimit(libc::RLIMIT_NOFILE, &new) == 0 {
+                    if libc::setrlimit(libc::RLIMIT_NOFILE as _, &new) == 0 {
                         return Some(want as u64);
                     }
                     want /= 2;

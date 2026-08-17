@@ -1,0 +1,31 @@
+{
+    "name": "pokerbots",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "remoteUser": "dev",
+    "mounts": [
+        "source=pokerbots-cargo-registry,target=/usr/local/cargo/registry,type=volume",
+        "source=pokerbots-target,target=/home/dev/target,type=volume"
+    ],
+    "postCreateCommand": "cargo fetch",
+    "forwardPorts": [8080],
+    "portsAttributes": {
+        "8080": { "label": "competition-api" }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "vadimcn.vscode-lldb"
+            ],
+            "settings": {
+                "rust-analyzer.check.command": "clippy"
+            }
+        }
+    }
+}

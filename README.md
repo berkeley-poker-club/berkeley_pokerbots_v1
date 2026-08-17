@@ -13,12 +13,24 @@ tournament-core/       TournamentDirector (table breaking, blind levels, SPEC pl
 pokerbots-cli/         `pokerbots`: local tournaments/series, smoke tests, stdio reference bots, load tests
 competition-platform/  `competition-api` + `tournament-worker`: SQLite store, artifacts, sandbox, jobs, API, web UI, scheduler, autoscaler
 bots/python/           SDK, reference bots (fold / call / raise / random) and a student template
-docs/                  BOT_PROTOCOL.md, openapi.yaml, QUICKSTART.md, OPERATIONS.md
-deploy/                Dockerfile, docker-compose.yml
+docs/                  BOT_PROTOCOL.md, openapi.yaml, QUICKSTART.md, OPERATIONS.md, DEVELOPMENT.md
+.devcontainer/         dev container (VS Code / Codespaces / `make docker-shell`)
+deploy/                production Dockerfile, docker-compose.yml, docker-compose.dev.yml
 SPEC.md                game + tournament rules (source of truth)
 ```
 
 ## Quick start
+
+**No local toolchain?** Open the repo in a GitHub Codespace or VS Code *Reopen in Container*
+(`.devcontainer/`), or with plain Docker:
+
+```bash
+make docker-shell     # dev shell with Rust + Python, repo at /workspace
+make docker-check     # fmt + clippy + full test suite in the container
+make docker-run-api   # platform on http://localhost:8080
+```
+
+**With Rust installed** (`make help` lists all targets):
 
 ```bash
 cargo build --release
@@ -76,10 +88,7 @@ average hands per table in the current level.
 
 ## Development
 
-```bash
-cargo test --workspace          # engine, protocol (needs python3), tournaments, platform e2e
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all
-```
-
-CI runs the same plus smoke tests of the reference bots (`.github/workflows/ci.yml`).
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Short version: `make check` (or
+`make docker-check` for the containerised toolchain) runs fmt + clippy `-D warnings` + the full
+test suite — the same gate as CI, which additionally smoke-tests the reference bots and builds
+the Docker images (`.github/workflows/ci.yml`).
