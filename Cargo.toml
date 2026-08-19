@@ -1,3 +1,16 @@
 [workspace]
-members = ["tournament-core", "poker-utils", "table-runner"]
+members = [
+    "poker-utils",
+    "table-runner",
+    "tournament-core",
+    "pokerbots-cli",
+    "competition-platform",
+]
 resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[profile.release]
+debug = 1

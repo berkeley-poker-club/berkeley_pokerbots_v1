@@ -1,0 +1,29 @@
+# Development environment in a container — no local Rust/Python needed.
+#
+#   make docker-shell    # or: docker compose -f deploy/docker-compose.dev.yml run --rm dev
+#   make docker-test     # full workspace test suite inside the container
+#
+# The repo is bind-mounted at /workspace; the cargo registry and build artifacts live in named
+# volumes so incremental builds survive container restarts and stay off the host bind mount.
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    image: pokerbots-dev
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    volumes:
+      - ..:/workspace:cached
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-target:/home/dev/target
+    environment:
+      RUST_BACKTRACE: "1"
+    ports:
+      - "8080:8080"
+
+volumes:
+  cargo-registry:
+  cargo-target:

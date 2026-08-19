@@ -1,0 +1,16 @@
+# Build context hygiene: keep images small and builds fast.
+target/
+**/target/
+data/
+.git/
+.idea/
+.claude/
+*.db
+*.db-wal
+*.db-shm
+*.log
+hands.jsonl
+pokerbots.toml
+.DS_Store
+__pycache__/
+*.pyc

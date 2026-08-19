@@ -1,0 +1,42 @@
+# Club-server deployment: API + 2 workers with the Docker bot sandbox.
+#   docker compose -f deploy/docker-compose.yml up -d --build
+# Data lives in /srv/pokerbots/data on the host; the path is identical inside the workers so the
+# host Docker daemon can bind-mount artifacts into bot containers.
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["competition-api", "--config", "/srv/pokerbots/pokerbots.toml"]
+    environment:
+      POKERBOTS_ADMIN_KEY: ${POKERBOTS_ADMIN_KEY:-change-me}
+      POKERBOTS_EMBEDDED_WORKERS: "0"
+      RUST_LOG: info
+    ports:
+      - "8080:8080"
+    volumes:
+      - /srv/pokerbots/data:/srv/pokerbots/data
+      - ./pokerbots.toml:/srv/pokerbots/pokerbots.toml:ro
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["tournament-worker", "--config", "/srv/pokerbots/pokerbots.toml"]
+    environment:
+      POKERBOTS_SANDBOX: docker
+      POKERBOTS_WORKER_CONCURRENCY: "2"
+      RUST_LOG: info
+    volumes:
+      - /srv/pokerbots/data:/srv/pokerbots/data
+      - ./pokerbots.toml:/srv/pokerbots/pokerbots.toml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Replica count is managed by the autoscaler (`[autoscaler] backend = "command"` in
+    # pokerbots.toml runs `docker compose ... --scale worker={n}`). The value below is only the
+    # starting point.
+    deploy:
+      replicas: 1
+    depends_on:
+      - api
+    restart: unless-stopped

@@ -565,3 +565,33 @@ All players receive a stream of `PublicEvent`s:
         leaderboard = sort_by_value(scores, ascending=true)  # lower is better
         publish(leaderboard)  # public leaderboard
         publish(stats)  # raw scores, placement on individual tournaments, etc.
+
+# Implementation Notes (engine as built)
+
+The Rust implementation follows this document; the following details are made explicit:
+
+- **Dealing:** no burn cards; two hole cards per seat dealt in seat order starting left of the
+  button, then flop/turn/river. Decks are seeded per (tournament seed, table, hand) so a
+  tournament is reproducible given the same bot answers.
+- **Blinds:** heads-up the button posts the small blind and acts first pre-flop; a short blind is
+  posted all-in for less and the big blind still sets the price to call; antes are posted before
+  the blinds and count toward side pots.
+- **Button:** moves to the next occupied seat clockwise each hand (no dead-button rule); newly
+  seated players take a random open seat and are dealt in from the next hand.
+- **Betting:** amounts are "to" amounts; the minimum raise is the last full raise increment; a
+  short all-in raise does not reopen the action for players who already acted since the last full
+  raise; once at most one player can act, remaining streets are dealt without betting.
+- **Pots:** built from total contributions at hand end (uncalled chips return through a
+  single-eligible pot layer); odd chips go to the first winner clockwise from the button.
+- **Placements:** the winner is placed 1st outright; everyone else is ranked by hands played
+  (descending) with shared ranks (competition ranking).
+- **Level advancement:** `hands_per_level` compares the *average* hands per table played in the
+  current level; the average-stack trigger fires when the average stack per active player *reaches*
+  the configured threshold (it only grows as players bust); the wall-clock cap is unchanged. All
+  tables are paused at a hand boundary before a level is applied.
+- **Table breaking:** one table breaks at a time, only when the remaining tables have room; its
+  players go to the emptiest tables (capacity permitting) and join at the next hand.
+- **Illegal / late / crashed:** the engine substitutes check-if-possible-else-fold and broadcasts
+  `ActionSubstituted`; a dead bot fails fast (no timeout is waited).
+- **Safety valve:** `max_hands_per_table` stops a tournament that cannot converge; survivors are
+  then ranked by stack ahead of everyone eliminated.
