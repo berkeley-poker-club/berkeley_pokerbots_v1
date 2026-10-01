@@ -70,6 +70,13 @@ Then follow [docs/QUICKSTART.md](docs/QUICKSTART.md) (students) and
 [docs/OPERATIONS.md](docs/OPERATIONS.md) (staff). The API is described in
 [docs/openapi.yaml](docs/openapi.yaml); the bot protocol in [docs/BOT_PROTOCOL.md](docs/BOT_PROTOCOL.md).
 
+## Hand histories
+
+Run `make view-hands` and open the printed localhost URL to load `hands.jsonl` and
+replay cards, actions, chip stacks, and pot awards. Multiple files and tournament
+series are supported. Save local histories with `--hand-log hands.jsonl`; see
+[docs/HAND_VIEWER.md](docs/HAND_VIEWER.md) for log locations, format, and examples.
+
 ## Engine guarantees (tested)
 
 * Blinds/antes incl. heads-up rules, short blinds all-in for less; BB/SB option.

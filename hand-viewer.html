@@ -1,0 +1,990 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pokerbots · Hand viewer</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101820; color: #e8eef3; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1900px; margin: auto; padding: 24px; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    h2 { font-size: 16px; margin: 0 0 12px; }
+    p { line-height: 1.5; }
+    .muted, small { color: #a6b7c6; }
+    .panel { background: #182530; border: 1px solid #324351; border-radius: 14px; padding: 16px; margin-top: 16px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+    label { display: grid; gap: 6px; font-size: 12px; min-width: 0; }
+    button, select, input { font: inherit; }
+    button, select, input[type=file], input[type=search] { border: 1px solid #526776; border-radius: 7px; padding: 8px 10px; background: #223645; color: #e8eef3; max-width: 100%; }
+    button { cursor: pointer; }
+    button:hover:enabled { background: #32536a; }
+    button:disabled { opacity: .4; cursor: default; }
+    :focus-visible { outline: 2px solid #7be0ba; outline-offset: 3px; }
+    select { max-width: 290px; }
+    #hand { max-width: 260px; }
+    .check { display: flex; align-items: center; align-self: center; gap: 8px; }
+    #message { white-space: pre-wrap; color: #ffcc83; margin-bottom: 0; }
+    #message:empty { display: none; }
+    #sync-note { font-size: 12px; margin: 12px 0; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+    .layout > *, .tables-grid > * { min-width: 0; }
+    .tables-grid { display: grid; gap: 12px; }
+    .tables-grid.multi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .table-panel { margin: 0; padding: 12px; overflow: hidden; transition: border-color .15s; }
+    .table-panel.focused { border-color: #7be0ba; }
+    .table-heading, .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .section-heading h2 { margin: 0; }
+    .small-button { font-size: 11px; padding: 6px 8px; white-space: nowrap; }
+    .focus-table[aria-pressed=true] { background: #31554a; border-color: #7be0ba; }
+    .table-meta { margin-top: 8px; font-size: 12px; }
+    #field-summary { margin: 8px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .table-viewport { position: relative; width: 100%; max-width: 800px; margin: 4px auto; overflow: hidden; }
+    .poker-table { position: absolute; left: 0; top: 0; transform-origin: top left; isolation: isolate; }
+    .felt { position: absolute; inset: 16% 9%; background: radial-gradient(ellipse at 50% 35%, #299363, #126143 65%, #0d4635); border: 12px solid #34423e; border-radius: 50%; box-shadow: 0 0 0 3px #53625b, inset 0 0 25px #0006, 0 14px 30px #0006; }
+    .table-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 1; }
+    .street { color: #c2e5ce; font-size: 13px; text-transform: uppercase; letter-spacing: .12em; }
+    .pot { background: #0b362c99; border-radius: 20px; padding: 6px 16px; margin: 10px auto; width: max-content; font-weight: 700; }
+    .button-label { font-size: 12px; color: #d5e8dc; }
+    .board, .cards { display: flex; gap: 6px; justify-content: center; }
+    .board { margin: 12px 0; min-height: 77px; }
+    .card { display: flex; flex-direction: column; align-items: center; justify-content: space-between; width: 53px; height: 77px; padding: 5px; flex-shrink: 0; background: #faf7ef; color: #172433; border: 2px solid white; border-radius: 5px; font-weight: 750; box-shadow: 0 3px 5px #0005; }
+    .card-rank { align-self: flex-start; font-size: 24px; line-height: 1; }
+    .card-suit { font-size: 33px; line-height: 1; }
+    .red { color: #c33143; }
+    .back { background: repeating-linear-gradient(45deg, #a94e57 0 2px, #b85e65 2px 5px); }
+    .seat { position: absolute; width: 132px; transform: translate(-50%, -50%); z-index: 3; text-align: center; }
+    .seat-info { display: block; width: 100%; border: 1px solid #52665f; background: #172922f2; border-radius: 9px; padding: 7px 9px; box-shadow: 0 3px 12px #0004; color: #e8eef3; }
+    .seat-name { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .seat.folded .cards, .seat.folded .seat-info { opacity: .5; }
+    .seat.current .seat-info { border-color: #7be0ba; box-shadow: 0 0 0 2px #7be0ba; }
+    .seat.winner .seat-info { background: #28513b; border-color: #cadd93; }
+    .seat .cards { gap: 0; min-height: 59px; margin-bottom: 5px; }
+    .seat .card { width: 40px; height: 57px; transform: rotate(-9deg); padding: 4px; }
+    .seat .card + .card { margin-left: -7px; transform: rotate(9deg); }
+    .seat .card-rank { font-size: 19px; }
+    .seat .card-suit { font-size: 25px; }
+    .seat-stack, .seat-action { display: block; margin-top: 3px; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .seat-action { color: #b5cec0; min-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .table-bet { position: absolute; transform: translate(-50%, -50%); z-index: 2; display: flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 18px; background: #082f26d9; color: #fff3c4; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .chip { display: inline-block; width: 16px; height: 16px; border: 3px dashed #f2e7c8; border-radius: 50%; background: #b44b48; box-shadow: 0 2px 0 #772b31; }
+    .dealer-marker { position: absolute; transform: translate(-50%, -50%); z-index: 4; display: grid; place-items: center; width: 31px; height: 31px; border-radius: 50%; border: 2px solid #c9d5e0; background: #fff; color: #253b56; font-size: 10px; font-weight: 800; }
+    .multi .seat { width: 108px; }
+    .multi .seat-info { padding: 5px; }
+    .multi .seat-name, .multi .seat-stack { font-size: 14px; }
+    .multi .seat-action { font-size: 12px; }
+    .multi .seat .cards { min-height: 46px; }
+    .multi .seat .card { width: 32px; height: 46px; }
+    .multi .seat .card-rank { font-size: 16px; }
+    .multi .seat .card-suit { font-size: 20px; }
+    .multi .board { min-height: 62px; margin: 6px 0; }
+    .multi .board .card { width: 43px; height: 62px; }
+    .multi .board .card-rank { font-size: 20px; }
+    .multi .board .card-suit { font-size: 27px; }
+    .multi .pot { margin: 6px auto; padding: 4px 12px; }
+    .table-event { font-size: 12px; min-height: 32px; line-height: 1.4; border-top: 1px solid #324351; padding-top: 8px; }
+    .empty-table { min-height: 230px; display: grid; place-items: center; text-align: center; padding: 24px; font-size: 14px; }
+    .playback { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .playback-panel { margin-top: 12px; }
+    #step { width: 100%; accent-color: #7be0ba; margin: 14px 0; }
+    #event-label { font-size: 12px; }
+    .sidebar { display: flex; flex-direction: column; gap: 12px; }
+    .sidebar .panel { margin: 0; padding: 14px; }
+    .stats-controls { margin-top: 12px; display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+    .stats-controls select { width: 100%; font-size: 11px; padding: 7px 5px; }
+    #stats-note, #player-detail { font-size: 11px; margin: 8px 0 12px; }
+    #player-search { width: 100%; font-size: 12px; }
+    #leaderboard { max-height: 230px; overflow: auto; margin-top: 8px; }
+    .leader { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 5px; border: 1px solid transparent; border-radius: 6px; background: transparent; text-align: left; }
+    .leader.chosen { background: #253e3d; border-color: #558a75; }
+    .rank { color: #89a398; font-size: 11px; width: 16px; flex-shrink: 0; }
+    .leader-name { flex: 1; min-width: 0; }
+    .leader-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+    .leader small { display: block; font-size: 9px; margin-top: 3px; }
+    .leader-value { text-align: right; flex-shrink: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .stats-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+    .stat { background: #101c25; padding: 8px 6px; border: 1px solid #2b414a; border-radius: 7px; min-width: 0; }
+    .stat-label { display: block; font-size: 10px; color: #a6b7c6; margin-bottom: 4px; }
+    .stat strong { display: block; font-size: 15px; font-variant-numeric: tabular-nums; }
+    .stat small { display: block; font-size: 9px; margin-top: 4px; overflow-wrap: anywhere; }
+    .stat-help { font-size: 11px; margin-top: 12px; }
+    .timeline-panel h2 { font-size: 14px; margin-bottom: 5px; }
+    .timeline-panel small { font-size: 10px; }
+    #events { position: relative; height: 132px; overflow: auto; display: grid; gap: 4px; margin-top: 8px; }
+    #events button { text-align: left; padding: 5px 6px; border-color: transparent; font-size: 11px; line-height: 1.35; }
+    #events .selected { background: #31554a; border-color: #7be0ba; }
+    #events .future { opacity: .5; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { text-align: left; border-bottom: 1px solid #324351; padding: 8px; white-space: nowrap; }
+    th button, td button { padding: 4px; border: none; background: transparent; font-size: 12px; }
+    .positive { color: #7be0ba; }
+    .negative { color: #ffa0a5; }
+    #awards p { margin: 8px 0; font-size: 14px; }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; font-weight: 600; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 400px; overflow: auto; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    [hidden] { display: none !important; }
+    body.focus-view main { max-width: none; padding: 10px; }
+    body.focus-view main > h1, body.focus-view main > p, body.focus-view .load-panel { display: none; }
+    body.focus-view .navigation { margin-top: 0; padding: 8px; gap: 8px; }
+    body.focus-view #sync-note { margin: 6px 0; }
+    body.focus-view .playback-panel { padding: 8px 12px; }
+    body.focus-view #step { margin: 8px 0; }
+    body.focus-view .sidebar { max-height: calc(100dvh - 120px); }
+    body.focus-view #leaderboard { max-height: 120px; }
+    body.focus-view .rankings-panel, body.focus-view .timeline-panel { flex-shrink: 0; }
+    body.focus-view .player-panel { flex: 1; min-height: 0; overflow: auto; }
+    body.focus-view .table-event { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 25px; }
+    @media (min-width: 1051px) {
+      body.focus-view .multi .seat { display: flex; align-items: center; width: 148px; }
+      body.focus-view .multi .seat .cards { width: 52px; flex-shrink: 0; margin: 0 4px 0 0; min-height: 0; }
+      body.focus-view .multi .seat .card { width: 28px; height: 40px; padding: 2px; }
+      body.focus-view .multi .seat .card-rank { font-size: 15px; }
+      body.focus-view .multi .seat .card-suit { font-size: 19px; }
+      body.focus-view .multi .seat-info { flex: 1; min-width: 0; padding: 4px 2px; }
+      body.focus-view .multi .seat-action { display: none; }
+    }
+    @media (min-width: 1500px) { .layout { grid-template-columns: minmax(0, 1fr) 370px; } }
+    @media (max-width: 1050px) { .layout { grid-template-columns: 1fr; } .sidebar { display: grid; grid-template-columns: 1fr 1fr; } .timeline-panel { grid-column: 2; } .rankings-panel { grid-row: span 2; } }
+    @media (max-width: 680px) { main { padding: 12px; } h1 { font-size: 23px; } .panel { padding: 12px; } .tables-grid.multi, .sidebar { grid-template-columns: 1fr; } .timeline-panel { grid-column: auto; } .rankings-panel { grid-row: auto; } .navigation { gap: 8px; } .navigation > label:first-child { width: 100%; } #tournament { max-width: 100%; } .table-event { font-size: 11px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Pokerbots hand viewer</h1>
+  <p class="muted">Load a hand log to explore the cards, actions, and chip movement. Files stay in your browser.</p>
+  <div class="panel load-panel">
+    <div class="controls">
+      <label>Hand histories <input id="files" type="file" accept=".jsonl,.ndjson,.json,application/json" multiple></label>
+      <button id="load-default">Load hands.jsonl beside this viewer</button>
+    </div>
+    <p id="summary" class="muted">Open this HTML file and choose hands.jsonl. You can select several logs together.</p>
+    <p id="message" role="status"></p>
+  </div>
+  <div id="viewer" hidden>
+    <div class="panel controls navigation">
+      <label>Tournament / source <select id="tournament"></select></label>
+      <label>Tables shown <select id="table-count"><option value="1">1 table</option></select></label>
+      <label><span id="round-label">Round</span><select id="hand"></select></label>
+      <label class="check"><input id="bb-display" type="checkbox"> BB display</label>
+      <label class="check"><input id="show-cards" type="checkbox" checked> Hole cards</label>
+      <button id="focus-view" aria-pressed="false">Focus view</button>
+    </div>
+    <p id="sync-note" class="muted"></p>
+    <p id="field-summary" class="muted" aria-live="polite"></p>
+    <div class="layout">
+      <div class="tables-column">
+        <div id="tables" class="tables-grid"></div>
+        <section class="panel playback-panel" aria-label="Shared table playback">
+          <div class="playback">
+            <button id="start">Start</button><button id="back" aria-label="Previous replay step">← Step</button>
+            <button id="forward" aria-label="Next replay step">Step →</button><button id="end">End</button>
+            <button id="flop">Flop</button><button id="turn">Turn</button><button id="river">River</button>
+            <button id="prev-round">← Previous round</button><button id="next-round">Next round →</button>
+          </div>
+          <input id="step" type="range" min="0" value="0" aria-label="Shared replay step">
+          <div id="event-label" aria-live="polite"></div>
+        </section>
+      </div>
+      <aside class="sidebar">
+        <section class="panel rankings-panel">
+          <div class="section-heading"><h2>Top players</h2><button id="export-stats" class="small-button">Export CSV</button></div>
+          <div class="controls stats-controls">
+            <label>Rank by <select id="rank-by"></select></label>
+            <label>Stats scope <select id="stats-scope"><option value="before" selected>Before current hand / round</option><option value="all">All loaded hands</option></select></label>
+          </div>
+          <p id="stats-note" class="muted"></p>
+          <input id="player-search" type="search" placeholder="Find a player…" aria-label="Search players">
+          <div id="leaderboard"></div><p id="players-empty" class="muted" hidden></p>
+        </section>
+        <section class="panel player-panel">
+          <h2 id="player-title">Player stats</h2><p id="player-detail" class="muted"></p>
+          <div id="player-stats" class="stats-grid"></div>
+          <details class="stat-help"><summary>What do these stats mean?</summary>
+            <p>Percentages use eligible hands or opportunities. Each cell shows its sample; hover for the definition. “—” means no opportunity. Clicking a seat or player opens their stats.</p>
+            <p>CB, Turn CB and River CB track continuation bets. W$SD and WWSF count any share of a split or side pot. bb/100 uses each hand’s big blind; it measures tournament chips, not ROI. Last stack is the latest recorded final stack.</p>
+          </details>
+        </section>
+        <section class="panel timeline-panel">
+          <h2 id="timeline-title">Action timeline</h2>
+          <small>Focus a table to inspect its actions. Click an event to seek all tables.</small>
+          <div id="events"></div>
+        </section>
+      </aside>
+    </div>
+    <details id="all-stats" class="panel">
+      <summary>All player stats · sortable columns</summary>
+      <p class="muted">Same scope and player search as the sidebar. Click a column to sort or a player to inspect.</p>
+      <div class="scroll"><table><thead id="stats-head"></thead><tbody id="stats-body"></tbody></table></div>
+    </details>
+    <details class="panel hand-result">
+      <summary id="result-title">Hand result</summary>
+      <p class="muted">Final result for the focused table, independent of the replay step.</p>
+      <div id="awards"></div>
+      <div class="scroll"><table><thead><tr><th>Seat</th><th>Player</th><th>Start</th><th>Final</th><th>Change</th><th>Result</th></tr></thead><tbody id="results"></tbody></table></div>
+      <details><summary>Raw hand JSON</summary><pre id="raw"></pre></details>
+    </details>
+  </div>
+  <template id="table-template">
+    <section class="panel table-panel">
+      <div class="table-heading"><label><span class="sr-only">Table</span><select class="lane-table"></select></label><button class="focus-table small-button" aria-pressed="false">Focus timeline</button></div>
+      <div class="table-meta muted"></div>
+      <div class="table-viewport">
+        <div class="poker-table">
+          <div class="felt"></div><div class="table-center"><strong class="street"></strong><div class="pot"></div><div class="board"></div><div class="button-label"></div></div>
+          <div class="seats"></div><div class="bets"></div><div class="dealer-marker" aria-label="Dealer button">BTN</div>
+        </div>
+      </div>
+      <div class="empty-table muted">No hand at this table in this round. Choose another table or an earlier round.</div>
+      <div class="table-event"></div>
+    </section>
+  </template>
+</main>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const format = value => Number(value).toLocaleString();
+let groups = [], visible = [], active = null, position = 0, displayEvents = [], playerNames = new Map();
+
+function node(tag, text, className) {
+  const element = document.createElement(tag);
+  if (text !== undefined) element.textContent = text;
+  if (className) element.className = className;
+  return element;
+}
+
+// Each record is a completed hand, not one individual event.
+function parseHistory(text) {
+  const source = text.replace(/^\uFEFF/, '').trim();
+  if (!source) return { records: [], errors: ['File is empty.'] };
+  let entries;
+  try {
+    const parsed = JSON.parse(source);
+    entries = (Array.isArray(parsed) ? parsed : [parsed]).map((record, i) => ({ record, location: `record ${i + 1}` }));
+  } catch (_) {
+    entries = source.split(/\r?\n/).flatMap((line, i) => {
+      if (!line.trim()) return [];
+      try { return [{ record: JSON.parse(line), location: `line ${i + 1}` }]; }
+      catch (error) { return [{ error: `line ${i + 1}: ${error.message}` }]; }
+    });
+  }
+  const records = [], errors = [];
+  for (const entry of entries) {
+    if (entry.error) { errors.push(entry.error); continue; }
+    const r = entry.record;
+    const start = r?.events?.find?.(e => e?.kind === 'HandStarted');
+    if (!r || !Array.isArray(r.events) || !r.events.every(e => e && typeof e.kind === 'string') ||
+        !start || !Array.isArray(start.seats) || !r.result || !Array.isArray(r.result.seats) ||
+        r.hand_id == null || r.table_id == null || r.tournament_id == null) {
+      errors.push(`${entry.location}: expected a hand record with tournament_id, table_id, hand_id, events (including HandStarted), and result.seats.`);
+      continue;
+    }
+    records.push(r);
+  }
+  return { records, errors };
+}
+
+function actionText(action, record = active) {
+  if (!action) return 'Unknown action';
+  if (action.kind === 'RaiseTo') return `Raise to ${amountText(action.amount, record)}`;
+  if (action.kind === 'BetTo') return `Bet to ${amountText(action.amount, record)}`;
+  return action.kind;
+}
+
+function strategyLabel(name, id) {
+  let label = String(name).replace(new RegExp(`#${id}$`), '').replace(/^builtin:/, '');
+  const subprocess = label.match(/(?:^|\s)--strategy(?:\s+|=)(\S+)/);
+  if (subprocess) return subprocess[1];
+  const python = label.match(/(?:^|\s)([^\s/\\]+)\.py(?:\s|$)/);
+  if (python) return python[1].replace(/_bot$/, '');
+  // LocalBot's default display name includes its player ID.
+  label = label.replace(new RegExp(`^(fold|callstation|raiser|random)-${id}$`), '$1');
+  return label;
+}
+
+function namesFor(records) {
+  const names = new Map(), ids = new Set();
+  for (const r of records) {
+    for (const [id, name] of Object.entries(r.player_names || {})) {
+      ids.add(String(id));
+      if (typeof name === 'string' && name.trim()) names.set(String(id), strategyLabel(name.trim(), id));
+    }
+    for (const s of r.events.find(e => e.kind === 'HandStarted').seats) {
+      if (s.player_id != null) ids.add(String(s.player_id));
+    }
+  }
+  const counts = new Map(), seen = new Map(), labels = new Map();
+  for (const name of names.values()) counts.set(name, (counts.get(name) || 0) + 1);
+  for (const id of [...ids].sort((a, b) => Number(a) - Number(b))) {
+    const name = names.get(id);
+    if (!name) { labels.set(id, `Player ${id}`); continue; }
+    const number = (seen.get(name) || 0) + 1;
+    seen.set(name, number);
+    labels.set(id, counts.get(name) > 1 ? `${name} ${number}` : name);
+  }
+  return labels;
+}
+
+function playerName(seat, record = active) {
+  const player = record?.events.find(e => e.kind === 'HandStarted').seats.find(s => s.seat === seat);
+  return playerNames.get(String(player?.player_id)) || `Seat ${seat}`;
+}
+
+// A dealing burst is one replay step; retain the original events in the raw log.
+function replayEvents(record) {
+  const events = [], settlement = [];
+  const finishSettlement = () => {
+    if (!settlement.length) return;
+    const reveals = settlement.filter(e => e.kind === 'ShowdownRevealed');
+    const awards = settlement.filter(e => e.kind === 'PotAwarded');
+    const winners = new Set(awards.flatMap(e => (e.winners || []).filter(([, amount]) => amount > 0).map(([seat]) => seat)));
+    events.push({
+      kind: 'ShowdownFinal',
+      reveals: reveals.filter(e => winners.has(e.seat)),
+      awards,
+      handEnded: settlement.find(e => e.kind === 'HandEnded') || null,
+    });
+    settlement.length = 0;
+  };
+  for (const e of record.events) {
+    if (settlement.length || ['ShowdownRevealed', 'PotAwarded', 'HandEnded'].includes(e.kind)) {
+      settlement.push(e);
+      if (e.kind === 'HandEnded') finishSettlement();
+      continue;
+    }
+    if (e.kind !== 'HoleCards') { events.push(e); continue; }
+    if (events.at(-1)?.kind !== 'HoleCardsDealt') events.push({ kind: 'HoleCardsDealt', hands: [] });
+    events.at(-1).hands.push(e);
+  }
+  finishSettlement();
+  return events;
+}
+
+function describe(e, record = active) {
+  const seat = playerName(e.seat, record);
+  switch (e.kind) {
+    case 'HandStarted': return `Hand starts · button seat ${e.button}`;
+    case 'AntePosted': return `${seat} · ante ${amountText(e.amount, record)}${e.all_in ? ' · all in' : ''}`;
+    case 'BlindPosted': return `${seat} · ${e.big ? 'big' : 'small'} blind ${amountText(e.amount, record)}${e.all_in ? ' · all in' : ''}`;
+    case 'HoleCards': return `${seat} · hole cards dealt`;
+    case 'HoleCardsDealt': return 'Hole cards dealt to all players';
+    case 'ActionTaken': return `${e.street} · ${seat} · ${actionText(e.action, record)}${e.action.kind === 'Call' ? ` ${amountText(e.amount, record)}` : ''}${e.all_in ? ' · all in' : ''}`;
+    case 'ActionSubstituted': return `${seat} · substituted ${actionText(e.substituted)} (${e.reason})`;
+    case 'BoardDealt': return `${e.street} · ${(e.cards || []).join(' ')} · pot ${amountText(e.pot, record)}`;
+    case 'ShowdownRevealed': return `${seat} · ${e.description}`;
+    case 'ShowdownFinal': {
+      const hands = e.reveals.map(hand => `${playerName(hand.seat, record)} · ${hand.description}`);
+      const awards = e.awards.flatMap(award => (award.winners || []).filter(([, amount]) => amount > 0).map(([winner, amount]) => `${playerName(winner, record)} wins ${amountText(amount, record)}`));
+      return [...hands, ...awards].join(' · ') || 'Hand ends';
+    }
+    case 'PotAwarded': return `${e.pot_index === 0 ? 'Main pot' : `Side pot ${e.pot_index}`} · ${(e.winners || []).map(([s, amount]) => `${playerName(s, record)} receives ${amountText(amount, record)}`).join(', ')}`;
+    case 'HandEnded': return 'Hand ends · final stacks';
+    default: return e.kind;
+  }
+}
+
+function replay(record, through) {
+  const state = { seats: new Map(), board: [], street: 'Preflop', pot: 0, button: null, current: null, ended: false };
+  for (const e of replayEvents(record).slice(0, through + 1)) {
+    const seat = state.seats.get(e.seat);
+    state.current = e.seat ?? null;
+    switch (e.kind) {
+      case 'HandStarted':
+        state.button = e.button;
+        state.seats = new Map(e.seats.map(s => [s.seat, { ...s, cards: [], revealed: false, won: 0, preflop: s.committed_street || 0, last: '' }]));
+        break;
+      case 'HoleCards': if (seat) seat.cards = e.cards; break;
+      case 'HoleCardsDealt':
+        for (const hand of e.hands) {
+          const player = state.seats.get(hand.seat);
+          if (player) player.cards = hand.cards;
+        }
+        break;
+      case 'AntePosted':
+      case 'BlindPosted':
+      case 'ActionTaken':
+        if (seat) {
+          seat.stack -= e.amount;
+          seat.committed_total += e.amount;
+          if (e.kind !== 'AntePosted') seat.committed_street = e.committed_street ?? seat.committed_street + e.amount;
+          if (e.kind !== 'AntePosted' && (e.street || state.street) === 'Preflop') seat.preflop = seat.committed_street;
+          state.pot += e.amount;
+          if (e.action?.kind === 'Fold') seat.status = 'Folded';
+          else if (e.all_in) seat.status = 'AllIn';
+          seat.last = e.kind === 'ActionTaken' ? actionText(e.action) : e.kind === 'BlindPosted' ? (e.big ? 'Big blind' : 'Small blind') : 'Ante';
+        }
+        if (e.street) state.street = e.street;
+        break;
+      case 'ActionSubstituted': if (seat) seat.last = `Substituted ${actionText(e.substituted)}`; break;
+      case 'BoardDealt':
+        state.board = e.board; state.street = e.street; state.pot = e.pot;
+        for (const s of state.seats.values()) { s.committed_street = 0; s.last = ''; }
+        break;
+      case 'ShowdownRevealed':
+        if (seat) { seat.cards = e.cards; seat.revealed = true; seat.last = e.description; }
+        state.street = 'Showdown';
+        break;
+      case 'PotAwarded':
+        for (const [index, amount] of e.winners) {
+          const winner = state.seats.get(index);
+          if (winner) { winner.stack += amount; winner.won += amount; }
+        }
+        state.pot -= e.amount;
+        break;
+      case 'ShowdownFinal':
+        for (const hand of e.reveals) {
+          const player = state.seats.get(hand.seat);
+          if (player) { player.cards = hand.cards; player.revealed = true; player.last = hand.description; }
+        }
+        for (const award of e.awards) {
+          for (const [index, amount] of award.winners || []) {
+            const winner = state.seats.get(index);
+            if (winner) { winner.won += amount; }
+          }
+          state.pot -= award.amount;
+        }
+        if (e.handEnded) for (const s of e.handEnded.seats) {
+          const current = state.seats.get(s.seat);
+          if (current) Object.assign(current, s);
+        }
+        state.pot = 0;
+        state.street = e.reveals.length ? 'Showdown' : 'Finished';
+        state.current = null;
+        state.ended = true;
+        break;
+      case 'HandEnded':
+        for (const s of e.seats) { const current = state.seats.get(s.seat); if (current) Object.assign(current, s); }
+        state.pot = 0; state.street = 'Finished'; state.ended = true;
+        break;
+    }
+  }
+  return state;
+}
+
+function cards(container, values, hidden = false) {
+  container.replaceChildren();
+  const suits = { s: '♠', h: '♥', d: '♦', c: '♣' };
+  for (const value of values) {
+    if (hidden) {
+      const card = node('span', undefined, 'card back');
+      card.setAttribute('aria-label', 'Face-down card');
+      container.append(card); continue;
+    }
+    const text = String(value), suit = text.slice(-1);
+    const rank = text.slice(0, -1).replace(/^T$/, '10');
+    const card = node('span', undefined, `card ${suit === 'h' || suit === 'd' ? 'red' : ''}`);
+    card.setAttribute('aria-label', rank + (suits[suit] || suit));
+    card.append(node('span', rank, 'card-rank'), node('span', suits[suit] || suit, 'card-suit'));
+    container.append(card);
+  }
+}
+
+function place(element, angle, radiusX, radiusY) {
+  element.style.left = `${50 + Math.cos(angle) * radiusX}%`;
+  element.style.top = `${50 + Math.sin(angle) * radiusY}%`;
+}
+
+// Stats are keyed by player ID, so a seat/table move never creates a new player.
+const statDefinitions = [
+  ['vpip', 'VPIP', 'Voluntarily put chips in preflop, excluding forced blinds/antes.', 'vpip', 'hands'],
+  ['pfr', 'PFR', 'Hands with at least one preflop raise.', 'pfr', 'hands'],
+  ['threeBet', '3B', 'Preflop re-raises / opportunities to re-raise the first raiser. Requires enough chips and reopened action.', 'threeBet', 'threeBetOpp'],
+  ['foldThreeBet', 'F3B', 'Folds facing a preflop 3-bet after voluntarily investing, before any 4-bet.', 'foldThreeBet', 'foldThreeBetOpp'],
+  ['cbet', 'CB', 'Flop continuation bets / opportunities for the last preflop raiser to bet an unopened flop.', 'cbet', 'cbetOpp'],
+  ['foldCbet', 'FCB', 'Folds facing a flop continuation bet, before any raise.', 'foldCbet', 'foldCbetOpp'],
+  ['turnCbet', 'Turn CB', 'Turn continuation bets after c-betting the flop, with no intervening raise or lead.', 'turnCbet', 'turnCbetOpp'],
+  ['riverCbet', 'River CB', 'River continuation bets after c-betting flop and turn, with no intervening raise or lead.', 'riverCbet', 'riverCbetOpp'],
+  ['wtsd', 'WTSD', 'Reached showdown / hands where this player saw the flop (including all-ins).', 'showdowns', 'sawFlop'],
+  ['wsd', 'W$SD', 'Won any share of a pot at showdown / showdowns reached; split and side-pot wins count.', 'showdownWins', 'showdowns'],
+  ['wwsf', 'WWSF', 'Won any share of a pot / hands where this player saw the flop.', 'flopWins', 'sawFlop'],
+  ['steal', 'ATS', 'Open raises when folded to in the cutoff, button, or small blind / opportunities. Heads-up button counts as small blind.', 'steal', 'stealOpp'],
+  ['af', 'AF', 'Postflop (bets + raises) / calls. Checks and folds are excluded. ∞ means aggression with no calls.'],
+  ['afq', 'AFq', 'Postflop (bets + raises) / (bets + raises + calls + folds). Checks excluded.', 'aggressive', 'afqOpp'],
+  ['bb100', 'bb/100', 'Sum of each hand’s net chips divided by that hand’s big blind, per 100 hands. Tournament chip rate, not cash winnings or ROI.'],
+];
+
+function blankStats(id) {
+  const s = { id: String(id), latestStack: 0, latestTable: null, net: 0, bbNet: 0, bbHands: 0 };
+  for (const key of ['hands', 'vpip', 'pfr', 'threeBet', 'threeBetOpp', 'foldThreeBet', 'foldThreeBetOpp', 'cbet', 'cbetOpp', 'foldCbet', 'foldCbetOpp', 'turnCbet', 'turnCbetOpp', 'riverCbet', 'riverCbetOpp', 'showdowns', 'showdownWins', 'sawFlop', 'flopWins', 'steal', 'stealOpp', 'aggressive', 'calls', 'afqOpp']) s[key] = 0;
+  return s;
+}
+
+function calculateStats(records) {
+  const players = new Map();
+  for (const record of records) {
+    const start = record.events.find(e => e.kind === 'HandStarted');
+    const seats = new Map(start.seats.filter(s => s.player_id != null).map(s => [s.seat, {
+      ...s, stat: players.get(String(s.player_id)) || blankStats(s.player_id),
+      invested: false, raised: false, threeBetChance: false, facedThreeBet: false,
+      facedCbet: false, flop: false, showdown: false, won: false, actedAt: null,
+    }]));
+    for (const s of seats.values()) { players.set(s.stat.id, s.stat); s.stat.hands++; }
+    const occupied = [...seats.keys()].sort((a, b) => a - b);
+    const buttonIndex = occupied.indexOf(start.button);
+    const stealSeats = new Set([start.button]);
+    if (buttonIndex >= 0 && occupied.length > 2) {
+      if (occupied.length >= 4) stealSeats.add(occupied[(buttonIndex + occupied.length - 1) % occupied.length]);
+      stealSeats.add(occupied[(buttonIndex + 1) % occupied.length]);
+    }
+    let betLevel = start.big_blind, minRaise = start.big_blind, raises = 0, lastRaiser = null;
+    let unopened = true, continuation = null, cbetSeat = null, streetBet = false;
+    let continuationChecked = false;
+    for (const e of record.events) {
+      const s = seats.get(e.seat);
+      if (e.kind === 'BlindPosted' || e.kind === 'AntePosted') {
+        if (s) { s.stack -= e.amount; if (e.kind === 'BlindPosted') s.committed_street += e.amount; if (e.all_in) s.status = 'AllIn'; }
+      } else if (e.kind === 'BoardDealt') {
+        // Capture participation before clearing street commitments, even on all-in runouts.
+        if (e.street === 'Flop') {
+          for (const s of seats.values()) if (s.status !== 'Folded') { s.flop = true; s.stat.sawFlop++; }
+          continuation = lastRaiser;
+        }
+        betLevel = 0; streetBet = false; continuationChecked = false; cbetSeat = null;
+        for (const s of seats.values()) { s.committed_street = 0; s.facedCbet = false; }
+      } else if (e.kind === 'ActionTaken' && s) {
+        const kind = e.action.kind, aggressive = kind === 'RaiseTo' || kind === 'BetTo';
+        if (e.street === 'Preflop') {
+          const reopened = s.actedAt == null || betLevel - s.actedAt >= minRaise;
+          const canRaise = s.status === 'Active' && s.stack > betLevel - s.committed_street && reopened;
+          if (raises === 1 && lastRaiser !== e.seat && canRaise && !s.threeBetChance) {
+            s.threeBetChance = true; s.stat.threeBetOpp++;
+            if (aggressive) s.stat.threeBet++;
+          }
+          if (raises === 2 && s.invested && betLevel > s.committed_street && !s.facedThreeBet) {
+            s.facedThreeBet = true; s.stat.foldThreeBetOpp++;
+            if (kind === 'Fold') s.stat.foldThreeBet++;
+          }
+          if (unopened && stealSeats.has(e.seat) && canRaise) {
+            s.stat.stealOpp++; if (aggressive) s.stat.steal++;
+          }
+          if ((kind === 'Call' && e.amount > 0) || aggressive) s.invested = true;
+          if (aggressive) {
+            s.raised = true; raises++;
+            const nextBet = e.committed_street ?? e.action.amount;
+            minRaise = Math.max(minRaise, nextBet - betLevel); betLevel = nextBet; lastRaiser = e.seat;
+          }
+          if (kind !== 'Fold' && kind !== 'Check') unopened = false;
+          s.actedAt = betLevel;
+        } else {
+          const cbKey = e.street === 'Flop' ? 'cbet' : e.street === 'Turn' ? 'turnCbet' : 'riverCbet';
+          if (e.seat === continuation && !streetBet && !continuationChecked) {
+            continuationChecked = true; s.stat[cbKey + 'Opp']++;
+            if (aggressive) { s.stat[cbKey]++; cbetSeat = e.seat; }
+            else continuation = null;
+          }
+          if (e.street === 'Flop' && cbetSeat != null && cbetSeat !== e.seat && !s.facedCbet && s.committed_street < betLevel) {
+            s.facedCbet = true; s.stat.foldCbetOpp++;
+            if (kind === 'Fold') s.stat.foldCbet++;
+          }
+          if (aggressive) {
+            s.stat.aggressive++; s.stat.afqOpp++;
+            if (streetBet || e.seat !== continuation) { continuation = null; cbetSeat = null; }
+            streetBet = true; betLevel = e.committed_street ?? e.action.amount;
+          } else if (kind === 'Call') { s.stat.calls++; s.stat.afqOpp++; }
+          else if (kind === 'Fold') s.stat.afqOpp++;
+        }
+        s.stack -= e.amount; s.committed_street = e.committed_street ?? s.committed_street + e.amount;
+        if (kind === 'Fold') s.status = 'Folded'; else if (e.all_in) s.status = 'AllIn';
+      } else if (e.kind === 'ShowdownRevealed' && s) s.showdown = true;
+      else if (e.kind === 'PotAwarded') for (const [seat, amount] of e.winners || []) if (amount > 0 && seats.has(seat)) seats.get(seat).won = true;
+    }
+    for (const [seat, s] of seats) {
+      const stat = s.stat, final = record.result.seats.find(f => f.seat === seat);
+      if (s.invested) stat.vpip++; if (s.raised) stat.pfr++;
+      const showdown = s.showdown || (record.result.went_to_showdown && s.status !== 'Folded');
+      if (showdown) { stat.showdowns++; if (s.won) stat.showdownWins++; }
+      if (s.flop && s.won) stat.flopWins++;
+      if (final) {
+        const delta = final.stack - start.seats.find(f => f.seat === seat).stack;
+        stat.net += delta; stat.latestStack = final.stack; stat.latestTable = record.table_id;
+        if (start.big_blind > 0) { stat.bbNet += delta / start.big_blind; stat.bbHands++; }
+      }
+    }
+  }
+  return players;
+}
+
+function statValue(s, key) {
+  const def = statDefinitions.find(d => d[0] === key);
+  if (key === 'af') return s.calls ? s.aggressive / s.calls : s.aggressive ? Infinity : null;
+  if (key === 'bb100') return s.bbHands ? s.bbNet * 100 / s.bbHands : null;
+  return s[def[4]] ? s[def[3]] * 100 / s[def[4]] : null;
+}
+function statText(s, key) {
+  const v = statValue(s, key);
+  return v == null ? '—' : v === Infinity ? '∞' : `${v.toFixed(1)}${key === 'af' || key === 'bb100' ? '' : '%'}`;
+}
+function statSample(s, def) {
+  if (def[0] === 'af') return `${s.aggressive} bets/raises · ${s.calls} calls`;
+  if (def[0] === 'bb100') return `${s.bbHands} hands · ${s.bbNet.toFixed(1)} bb net`;
+  return `${s[def[3]]} / ${s[def[4]]}`;
+}
+
+let lanes = [], tableIds = [], roundIndex = 0, focusedLane = 0, maxStep = 0;
+let stats = new Map(), selectedPlayer = null, statsSort = 'latestStack', statsDescending = true;
+function amountText(amount, record) {
+  if (!$('bb-display')?.checked) return format(amount);
+  const start = record?.events.find(e => e.kind === 'HandStarted');
+  const bb = Number(start?.big_blind);
+  return bb > 0 ? `${(Number(amount) / bb).toFixed(1)} bb` : format(amount);
+}
+const tableSizeObserver = new ResizeObserver(entries => {
+  for (const { target } of entries) fitTable(target);
+});
+function fitTable(viewport) {
+  const stage = viewport.querySelector('.poker-table');
+  if (!stage) return;
+  let scale = Math.min(1, viewport.clientWidth / Number(stage.dataset.width));
+  if (document.body.classList.contains('focus-view') && innerWidth > 1050) {
+    const rows = lanes.length > 2 ? 2 : 1;
+    const available = innerHeight - $('tables').getBoundingClientRect().top - document.querySelector('.playback-panel').offsetHeight - 26;
+    const maxHeight = Math.max(140, (available - (rows - 1) * 12) / rows - 125);
+    scale = Math.min(scale, maxHeight / Number(stage.dataset.height));
+  }
+  stage.style.transform = `scale(${scale})`;
+  stage.style.left = `${Math.max(0, (viewport.clientWidth - Number(stage.dataset.width) * scale) / 2)}px`;
+  viewport.style.height = `${Number(stage.dataset.height) * scale}px`;
+}
+function selectedGroup() { return groups[Number($('tournament').value)]; }
+function multiTable() { return Number($('table-count').value) > 1; }
+function recordsForTable(id) { return selectedGroup().records.filter(r => String(r.table_id) === id); }
+function laneRecords(lane) { return lane.tableId === '*' ? selectedGroup().records : recordsForTable(lane.tableId); }
+function selectedRoundRecords() { return lanes.map(l => laneRecords(l)[roundIndex]).filter(Boolean); }
+
+function renderTable(lane, index) {
+  const record = lane.record, root = lane.element;
+  root.classList.toggle('focused', index === focusedLane);
+  root.querySelector('.focus-table').setAttribute('aria-pressed', String(index === focusedLane));
+  root.querySelector('.focus-table').disabled = !record;
+  const viewport = root.querySelector('.table-viewport');
+  viewport.hidden = !record; root.querySelector('.empty-table').hidden = !!record;
+  if (!record) { root.querySelector('.table-meta').textContent = 'No hand in this round'; return; }
+  const events = lane.events, localPosition = Math.min(position, events.length - 1);
+  const state = replay(record, localPosition), start = record.events.find(e => e.kind === 'HandStarted');
+  const nameFor = seat => playerName(seat, record);
+  root.querySelector('.table-meta').textContent = `Table ${record.table_id} · Hand ${roundIndex + 1} · Blinds ${start.small_blind}/${start.big_blind} · Level ${record.level}`;
+  root.querySelector('.table-meta').title = `Hand ID ${record.hand_id} · Ante ${start.ante}`;
+  root.querySelector('.street').textContent = state.street;
+  root.querySelector('.pot').textContent = `Pot ${amountText(state.pot, record)}`;
+  root.querySelector('.button-label').textContent = `BTN · ${nameFor(state.button)}`;
+  cards(root.querySelector('.board'), state.board);
+  const seatsRoot = root.querySelector('.seats'), betsRoot = root.querySelector('.bets'), dealer = root.querySelector('.dealer-marker');
+  seatsRoot.replaceChildren(); betsRoot.replaceChildren(); dealer.hidden = true;
+  const occupied = [...state.seats.values()].filter(s => s.player_id != null).sort((a, b) => a.seat - b.seat);
+  const stage = root.querySelector('.poker-table');
+  // Keep the familiar table proportions while fitting four tables on a laptop.
+  const dense = multiTable(), extra = Math.max(1, occupied.length / 9);
+  const compactFocus = dense && document.body.classList.contains('focus-view') && innerWidth > 1050;
+  stage.dataset.width = Math.round((dense ? 640 : 800) * extra);
+  stage.dataset.height = Math.round((compactFocus ? 300 : dense ? 550 : 620) * extra);
+  stage.style.width = `${stage.dataset.width}px`; stage.style.height = `${stage.dataset.height}px`;
+  for (const [i, s] of occupied.entries()) {
+    const angle = Math.PI / 2 + i * 2 * Math.PI / occupied.length;
+    const box = node('div', undefined, `seat ${s.status === 'Folded' ? 'folded' : ''} ${s.seat === state.current ? 'current' : ''} ${s.won ? 'winner' : ''}`);
+    box.dataset.seat = s.seat; place(box, angle, compactFocus ? 38 : 40, 37);
+    const handCards = node('div', undefined, 'cards');
+    cards(handCards, s.cards, !$('show-cards').checked && !s.revealed);
+    const info = node('button', undefined, 'seat-info');
+    info.type = 'button'; info.setAttribute('aria-label', `View stats for ${nameFor(s.seat)}`);
+    info.onclick = () => { selectedPlayer = String(s.player_id); renderStats(); };
+    const name = node('strong', nameFor(s.seat), 'seat-name');
+    const last = s.won ? `Won ${format(s.won)}` : state.ended && s.stack === 0 ? 'Busted' : s.status === 'Folded' ? 'Folded' : s.status === 'AllIn' ? 'All in' : s.last || `Seat ${s.seat}`;
+    const action = node('span', last, `seat-action${s.won ? ' positive' : ''}`); action.title = last;
+    info.append(name, node('span', amountText(s.stack, record), 'seat-stack'), action);
+    const playerStats = stats.get(String(s.player_id));
+    info.title = `${nameFor(s.seat)} · Player ${s.player_id} · Seat ${s.seat}\n${s.status} · Preflop ${format(s.preflop)} · Street ${format(s.committed_street)} · Total ${format(s.committed_total)}${playerStats ? `\n${playerStats.hands} hands · VPIP ${statText(playerStats, 'vpip')} · PFR ${statText(playerStats, 'pfr')} · 3B ${statText(playerStats, 'threeBet')}` : ''}\nClick for player stats`;
+    box.append(handCards, info); seatsRoot.append(box);
+    if (s.committed_street > 0 && !state.ended) {
+      const bet = node('div', undefined, 'table-bet'); bet.dataset.seat = s.seat;
+      bet.append(node('span', undefined, 'chip'), node('span', amountText(s.committed_street, record)));
+      bet.setAttribute('aria-label', `${nameFor(s.seat)} committed ${amountText(s.committed_street, record)} on ${state.street}`);
+      place(bet, angle, 27, 23); betsRoot.append(bet);
+    }
+    if (s.seat === state.button) { dealer.hidden = false; place(dealer, angle + .22, 33, 27); dealer.title = `Dealer button · ${nameFor(s.seat)}`; }
+  }
+  root.querySelector('.table-event').textContent = `${localPosition + 1}/${events.length} · ${describe(events[localPosition], record)}`;
+  root.querySelector('.table-event').title = root.querySelector('.table-event').textContent;
+  fitTable(viewport);
+}
+
+function renderTimeline() {
+  $('events').replaceChildren();
+  if (!active) { $('timeline-title').textContent = 'Action timeline'; return; }
+  $('timeline-title').textContent = `Timeline · Table ${active.table_id}`;
+  const localPosition = Math.min(position, displayEvents.length - 1);
+  displayEvents.forEach((e, i) => {
+    const button = node('button', `${i + 1}. ${describe(e, active)}`, i === localPosition ? 'selected' : i > localPosition ? 'future' : '');
+    button.setAttribute('aria-current', i === localPosition ? 'step' : 'false');
+    button.onclick = () => seek(i); $('events').append(button);
+  });
+  const selected = $('events').children[localPosition];
+  if (selected) $('events').scrollTop = Math.max(0, selected.offsetTop - $('events').firstElementChild.offsetTop - 55);
+}
+function renderResults() {
+  $('awards').replaceChildren(); $('results').replaceChildren(); $('raw').textContent = '';
+  $('result-title').textContent = active ? `Hand result · Table ${active.table_id}` : 'Hand result';
+  if (!active) return;
+  for (const award of active.result.awards || []) $('awards').append(node('p', describe({ kind: 'PotAwarded', ...award }, active)));
+  const start = active.events.find(e => e.kind === 'HandStarted'), final = new Map(active.result.seats.map(s => [s.seat, s]));
+  for (const s of start.seats) {
+    if (s.player_id == null || !final.has(s.seat)) continue;
+    const end = final.get(s.seat), delta = end.stack - s.stack, row = node('tr');
+    [s.seat, playerName(s.seat, active), format(s.stack), format(end.stack), `${delta > 0 ? '+' : ''}${format(delta)}`, end.stack === 0 ? 'Busted' : 'Survived'].forEach((text, i) => row.append(node('td', text, i === 4 ? (delta > 0 ? 'positive' : delta < 0 ? 'negative' : '') : '')));
+    $('results').append(row);
+  }
+  $('raw').textContent = JSON.stringify(active, null, 2);
+}
+function focusLane(index) {
+  focusedLane = index; active = lanes[index]?.record || null; displayEvents = lanes[index]?.events || [];
+  lanes.forEach((l, i) => { l.element.classList.toggle('focused', i === index); l.element.querySelector('.focus-table').setAttribute('aria-pressed', String(i === index)); });
+  for (const street of ['Flop', 'Turn', 'River']) {
+    const target = lanes[index]?.events.findIndex(e => e.kind === 'BoardDealt' && e.street === street) ?? -1;
+    $(street.toLowerCase()).disabled = target < 0;
+  }
+  renderTimeline(); renderResults();
+}
+function render() {
+  lanes.forEach(renderTable); renderFieldSummary(); $('step').value = position;
+  $('back').disabled = $('start').disabled = position === 0;
+  $('forward').disabled = $('end').disabled = position >= maxStep;
+  for (const street of ['Flop', 'Turn', 'River']) {
+    const target = lanes[focusedLane]?.events.findIndex(e => e.kind === 'BoardDealt' && e.street === street) ?? -1;
+    $(street.toLowerCase()).disabled = target < 0;
+  }
+  $('event-label').textContent = `Step ${position + 1} of ${maxStep + 1} · ${lanes.filter(l => l.record).length} table${lanes.filter(l => l.record).length === 1 ? '' : 's'}`;
+  renderTimeline();
+}
+function renderFieldSummary() {
+  const records = selectedGroup().records;
+  const starts = new Map(), stacks = new Map();
+  for (const record of records) {
+    const start = record.events.find(e => e.kind === 'HandStarted');
+    for (const seat of start?.seats || []) if (seat.player_id != null) {
+      const id = String(seat.player_id);
+      if (!starts.has(id)) { starts.set(id, seat.stack); stacks.set(id, seat.stack); }
+    }
+  }
+  let completedBefore;
+  if (!multiTable() && lanes[0]?.tableId === '*') completedBefore = records.slice(0, roundIndex);
+  else completedBefore = tableIds.flatMap(id => recordsForTable(id).slice(0, roundIndex));
+  for (const record of completedBefore) for (const seat of record.result?.seats || []) {
+    if (seat.player_id != null) stacks.set(String(seat.player_id), seat.stack);
+  }
+  const current = selectedRoundRecords();
+  for (const record of current) {
+    const lane = lanes.find(l => l.record === record);
+    if (!lane) continue;
+    const state = replay(record, Math.min(position, lane.events.length - 1));
+    for (const seat of state.seats.values()) if (seat.player_id != null) stacks.set(String(seat.player_id), seat.stack);
+  }
+  const liveStacks = [...stacks.values()].filter(stack => Number(stack) > 0);
+  const total = liveStacks.reduce((sum, stack) => sum + Number(stack), 0);
+  const average = liveStacks.length ? total / liveStacks.length : 0;
+  const currentRecord = current[0] || active;
+  $('field-summary').textContent = `${liveStacks.length} / ${starts.size} players · Avg stack ${amountText(average, currentRecord)}`;
+}
+function seek(to) { position = Math.max(0, Math.min(maxStep, to)); render(); }
+
+function options(select, items) {
+  select.replaceChildren();
+  for (const [value, label] of items) { const option = node('option', label); option.value = value; select.append(option); }
+}
+function updateRoundOptions() {
+  if (!multiTable()) {
+    visible = laneRecords(lanes[0]);
+    options($('hand'), visible.map((r, i) => [i, `${i + 1} · Table ${r.table_id} · ID ${r.hand_id}`]));
+  } else {
+    const count = Math.max(...lanes.map(l => laneRecords(l).length));
+    visible = Array.from({ length: count }, (_, i) => i);
+    options($('hand'), visible.map(i => [i, `Round ${i + 1}`]));
+  }
+  $('round-label').textContent = 'Round';
+}
+function selectRound(index = Number($('hand').value)) {
+  roundIndex = Math.max(0, Math.min(visible.length - 1, index)); position = 0;
+  $('hand').value = roundIndex;
+  for (const lane of lanes) { lane.record = laneRecords(lane)[roundIndex]; lane.events = lane.record ? replayEvents(lane.record) : []; }
+  maxStep = Math.max(0, ...lanes.map(l => l.events.length - 1)); $('step').max = maxStep;
+  $('prev-round').disabled = roundIndex === 0; $('next-round').disabled = roundIndex === visible.length - 1;
+  if (!lanes[focusedLane]?.record) focusedLane = Math.max(0, lanes.findIndex(l => l.record));
+  focusLane(focusedLane); refreshStats(); render();
+}
+function buildTables(preserve = false) {
+  tableSizeObserver.disconnect();
+  const old = preserve ? lanes.map(l => l.tableId) : [];
+  const count = Number($('table-count').value); lanes = []; $('tables').replaceChildren();
+  $('tables').classList.toggle('multi', count > 1);
+  for (let i = 0; i < count; i++) {
+    const element = $('table-template').content.firstElementChild.cloneNode(true);
+    const tableId = old[i] && (old[i] !== '*' || count === 1) ? old[i] : count === 1 ? '*' : tableIds.find(t => !lanes.some(l => l.tableId === t));
+    const lane = { tableId, element, record: null, events: [] }; lanes.push(lane);
+    const select = element.querySelector('.lane-table'); select.setAttribute('aria-label', `Table for display ${i + 1}`);
+    options(select, [...(count === 1 ? [['*', 'All tables']] : []), ...tableIds.map(id => [id, `Table ${id}`])]); select.value = tableId;
+    select.onchange = () => {
+      const duplicate = lanes.find(l => l !== lane && l.tableId === select.value);
+      if (duplicate) { duplicate.tableId = lane.tableId; duplicate.element.querySelector('.lane-table').value = lane.tableId; }
+      lane.tableId = select.value; updateRoundOptions(); selectRound(roundIndex);
+    };
+    element.querySelector('.focus-table').onclick = () => focusLane(i);
+    $('tables').append(element); tableSizeObserver.observe(element.querySelector('.table-viewport'));
+  }
+  $('sync-note').textContent = count > 1 ? 'Parallel replay: each round pairs the next hand at each table. Shared steps are approximate; logs have no timestamps.' : 'One hand at a time · select All tables to follow file order.';
+  focusedLane = 0; updateRoundOptions(); selectRound(preserve ? roundIndex : 0);
+}
+function selectTournament() {
+  playerNames = namesFor(selectedGroup().records);
+  tableIds = [...new Set(selectedGroup().records.map(r => String(r.table_id)))].sort((a, b) => Number(a) - Number(b));
+  const previous = Number($('table-count').value || 1);
+  options($('table-count'), [1, 2, 3, 4].map(n => [n, `${n} table${n === 1 ? '' : 's'}`]));
+  for (const option of $('table-count').options) option.disabled = Number(option.value) > tableIds.length;
+  $('table-count').value = Math.min(previous, tableIds.length, 4); selectedPlayer = null; buildTables();
+}
+
+function refreshStats() {
+  let records = selectedGroup().records;
+  if ($('stats-scope').value === 'before') {
+    // Exclude current unfinished hands, retaining file order for cross-table moves.
+    const allowed = new Set();
+    if (!multiTable() && lanes[0].tableId === '*') for (const r of records.slice(0, roundIndex)) allowed.add(r);
+    else for (const id of tableIds) for (const r of recordsForTable(id).slice(0, roundIndex)) allowed.add(r);
+    records = records.filter(r => allowed.has(r));
+  }
+  stats = calculateStats(records);
+  $('stats-note').textContent = `${records.length} completed hands · all ${tableIds.length} tables · ${$('stats-scope').value === 'before' ? 'before this round' : 'full loaded history'}`;
+  renderStats();
+}
+function sortedPlayers() {
+  const search = $('player-search').value.trim().toLowerCase();
+  const value = s => statDefinitions.some(d => d[0] === statsSort) ? statValue(s, statsSort) : s[statsSort];
+  return [...stats.values()].filter(s => `${playerNames.get(s.id)} ${s.id}`.toLowerCase().includes(search)).sort((a, b) => {
+    const av = value(a), bv = value(b);
+    if (av == null && bv != null) return 1; if (bv == null && av != null) return -1;
+    return (av === bv ? 0 : av > bv ? 1 : -1) * (statsDescending ? -1 : 1) || a.id.localeCompare(b.id, undefined, { numeric: true });
+  });
+}
+function renderStats() {
+  const players = sortedPlayers(); $('leaderboard').replaceChildren();
+  if (!selectedPlayer && players.length) selectedPlayer = players[0].id;
+  const valueLabel = statsSort === 'latestStack' ? 'Last stack' : statsSort === 'net' ? 'Net chips' : statsSort === 'hands' ? 'Hands' : statDefinitions.find(d => d[0] === statsSort)?.[1];
+  players.forEach((s, i) => {
+    const button = node('button', undefined, `leader ${selectedPlayer === s.id ? 'chosen' : ''}`);
+    button.setAttribute('aria-pressed', String(selectedPlayer === s.id));
+    button.append(node('span', i + 1, 'rank'));
+    const info = node('span', undefined, 'leader-name'); info.append(node('strong', playerNames.get(s.id) || `Player ${s.id}`), node('small', `${s.hands} hands · VPIP ${statText(s, 'vpip')} · PFR ${statText(s, 'pfr')}`));
+    const value = node('span', undefined, 'leader-value'); value.append(node('strong', statDefinitions.some(d => d[0] === statsSort) ? statText(s, statsSort) : format(s[statsSort])), node('small', valueLabel));
+    button.append(info, value); button.onclick = () => { selectedPlayer = s.id; renderStats(); }; $('leaderboard').append(button);
+  });
+  $('players-empty').hidden = players.length > 0;
+  $('players-empty').textContent = stats.size ? 'No players match this search.' : 'No completed hands in this scope yet.';
+  const s = stats.get(selectedPlayer); $('player-stats').replaceChildren();
+  $('player-title').textContent = s ? playerNames.get(s.id) || `Player ${s.id}` : 'Player stats';
+  $('player-detail').textContent = s ? `Player ${s.id} · ${s.hands} hands · last stack ${format(s.latestStack)} · net ${s.net > 0 ? '+' : ''}${format(s.net)}` : 'Select a player or click their seat.';
+  if (s) for (const def of statDefinitions) {
+    const cell = node('div', undefined, 'stat'); cell.title = `${def[2]}\n${statSample(s, def)}`;
+    cell.append(node('span', def[1], 'stat-label'), node('strong', statText(s, def[0])), node('small', statSample(s, def))); $('player-stats').append(cell);
+  }
+  if ($('all-stats').open) renderStatsTable();
+}
+function renderStatsTable() {
+  const columns = [['latestStack', 'Last stack'], ['net', 'Net chips'], ['hands', 'Hands'], ...statDefinitions.map(d => [d[0], d[1]])];
+  const header = node('tr'); header.append(node('th', 'Player'));
+  for (const [key, name] of columns) {
+    const th = node('th'), button = node('button', `${name}${statsSort === key ? statsDescending ? ' ↓' : ' ↑' : ''}`);
+    th.setAttribute('aria-sort', statsSort === key ? statsDescending ? 'descending' : 'ascending' : 'none');
+    button.title = statDefinitions.find(d => d[0] === key)?.[2] || name;
+    button.onclick = () => { statsDescending = statsSort === key ? !statsDescending : true; statsSort = key; $('rank-by').value = key; renderStats(); };
+    th.append(button); header.append(th);
+  }
+  $('stats-head').replaceChildren(header); $('stats-body').replaceChildren();
+  for (const s of sortedPlayers()) {
+    const row = node('tr'), name = node('button', playerNames.get(s.id) || `Player ${s.id}`);
+    name.onclick = () => { selectedPlayer = s.id; renderStats(); $('player-title').scrollIntoView({ block: 'nearest' }); };
+    const cell = node('td'); cell.append(name); row.append(cell);
+    for (const [key] of columns) { const td = node('td', statDefinitions.some(d => d[0] === key) ? statText(s, key) : format(s[key])); const def = statDefinitions.find(d => d[0] === key); if (def) td.title = `${def[2]}\n${statSample(s, def)}`; row.append(td); }
+    $('stats-body').append(row);
+  }
+}
+function exportStats() {
+  const escape = value => `"${String(value).replaceAll('"', '""')}"`;
+  const defs = statDefinitions;
+  const rows = [['Player ID', 'Player', 'Hands', 'Last stack', 'Net chips', ...defs.flatMap(d => [d[1], `${d[1]} sample`])]];
+  for (const s of sortedPlayers()) rows.push([s.id, playerNames.get(s.id) || `Player ${s.id}`, s.hands, s.latestStack, s.net, ...defs.flatMap(d => [statText(s, d[0]), statSample(s, d)])]);
+  const url = URL.createObjectURL(new Blob([rows.map(r => r.map(escape).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+  const link = node('a'); link.href = url; link.download = `pokerbots-player-stats-${$('stats-scope').value}.csv`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+$('tournament').onchange = selectTournament;
+$('table-count').onchange = () => buildTables(true);
+$('focus-view').onclick = () => {
+  const focused = document.body.classList.toggle('focus-view');
+  $('focus-view').setAttribute('aria-pressed', String(focused)); $('focus-view').textContent = focused ? 'Exit focus view' : 'Focus view';
+  render(); requestAnimationFrame(() => { document.querySelectorAll('.table-viewport').forEach(fitTable); if (focused) window.scrollTo(0, 0); });
+};
+window.addEventListener('resize', () => { if (lanes.length) render(); });
+$('hand').onchange = () => selectRound();
+$('show-cards').onchange = render;
+$('bb-display').onchange = render;
+$('prev-round').onclick = () => selectRound(roundIndex - 1);
+$('next-round').onclick = () => selectRound(roundIndex + 1);
+for (const [id, getPosition] of [['start', () => 0], ['back', () => position - 1], ['forward', () => position + 1], ['end', () => maxStep]]) $(id).onclick = () => seek(getPosition());
+$('step').oninput = () => seek(Number($('step').value));
+for (const street of ['Flop', 'Turn', 'River']) {
+  $(street.toLowerCase()).onclick = () => {
+    const target = lanes[focusedLane]?.events.findIndex(e => e.kind === 'BoardDealt' && e.street === street) ?? -1;
+    if (target >= 0) seek(target);
+  };
+}
+$('stats-scope').onchange = refreshStats;
+$('rank-by').onchange = () => { statsSort = $('rank-by').value; statsDescending = true; renderStats(); };
+$('player-search').oninput = renderStats;
+$('all-stats').ontoggle = () => { if ($('all-stats').open) renderStatsTable(); };
+$('export-stats').onclick = exportStats;
+options($('rank-by'), [['latestStack', 'Last stack'], ['net', 'Net chips'], ['hands', 'Hands'], ...statDefinitions.map(d => [d[0], d[1]])]);
+document.addEventListener('keydown', e => {
+  if (!active || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'SUMMARY', 'A'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); seek(position + (e.key === 'ArrowRight' ? 1 : -1)); }
+});
+
+async function loadSources(sources) {
+  const nextGroups = [], issues = [];
+  for (const source of sources) {
+    try {
+      const { records, errors } = parseHistory(await source.read());
+      const byTournament = new Map();
+      for (const record of records) {
+        const id = String(record.tournament_id);
+        if (!byTournament.has(id)) byTournament.set(id, []);
+        byTournament.get(id).push(record);
+      }
+      for (const [id, records] of byTournament) nextGroups.push({ label: `${source.name} · ${id}`, records });
+      if (errors.length) issues.push(`${source.name}: ${errors.length} issue(s)\n${errors.slice(0, 4).join('\n')}${errors.length > 4 ? '\n…' : ''}`);
+    } catch (error) { issues.push(`${source.name}: ${error.message}`); }
+  }
+  $('message').textContent = issues.join('\n');
+  if (!nextGroups.length) { $('message').textContent ||= 'No hand records found.'; return; }
+  groups = nextGroups;
+  options($('tournament'), groups.map((g, i) => [i, `${g.label} (${g.records.length} hands)`]));
+  $('summary').textContent = `${groups.reduce((n, g) => n + g.records.length, 0)} hands · ${groups.length} tournament/source groups · ${sources.length} file(s). Hands follow their recorded order.`;
+  $('viewer').hidden = false;
+  selectTournament();
+}
+
+$('files').onchange = () => loadSources([...$('files').files].map(f => ({ name: f.name, read: () => f.text() })));
+$('load-default').onclick = async () => {
+  if (location.protocol === 'file:') {
+    $('message').textContent = 'Choose hands.jsonl using the file picker above. Loading the neighboring file automatically requires serving this folder over HTTP (python3 -m http.server 8000).';
+    return;
+  }
+  await loadSources([{ name: 'hands.jsonl', read: async () => {
+    const response = await fetch(`./hands.jsonl?_=${Date.now()}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: could not load hands.jsonl`);
+    return response.text();
+  } }]);
+};
+if (new URLSearchParams(location.search).get('load-default') === '1') $('load-default').click();
+</script>
+</body>
+</html>
