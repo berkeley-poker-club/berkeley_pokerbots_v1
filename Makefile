@@ -7,7 +7,9 @@ COMPOSE_DEV := docker compose -f deploy/docker-compose.dev.yml
 DEV_RUN     := $(COMPOSE_DEV) run --rm dev
 
 .PHONY: help build test check fmt clippy run-api run-worker bench \
-        docker-image docker-shell docker-test docker-check docker-build docker-run-api docker-clean prod-image
+        view-hands docker-image docker-shell docker-test docker-check docker-build docker-run-api docker-clean prod-image
+
+HAND_VIEWER_PORT ?= 8000
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -36,6 +38,10 @@ run-worker: ## Run a tournament worker locally
 
 bench: ## 200-bot load test with subprocess bots
 	cargo run --release -p pokerbots-cli --bin pokerbots -- bench --players 200 --process --no-time-levels
+
+view-hands: ## Serve the hand viewer and hands.jsonl on localhost
+	@printf 'Open http://localhost:%s/hand-viewer.html?load-default=1\n' "$(HAND_VIEWER_PORT)"
+	python3 -m http.server "$(HAND_VIEWER_PORT)" --bind 127.0.0.1
 
 # ---------------------------------------------------------------- docker (development)
 
